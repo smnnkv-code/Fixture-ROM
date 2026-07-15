@@ -30,6 +30,19 @@
 
 ---
 
+## 📸 Интерфейс панели управления (Dashboard)
+
+<p align="center">
+  <img src="docs/screenshots/dashboard_console.png" width="100%" alt="Лог консоли" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard_files.png" width="49%" alt="База файлов" />
+  <img src="docs/screenshots/dashboard_scrapers.png" width="49%" alt="Настройки автопоиска" />
+</p>
+
+---
+
 ## 📁 Структура проекта
 
 ```text
