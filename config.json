@@ -1,0 +1,15 @@
+{
+    "enabled_categories": {
+        "firmware": true,
+        "dmx": true
+    },
+    "enabled_brands": {
+        "Aputure": true,
+        "Amaran": true,
+        "Nanlite": true,
+        "Nanlux": true,
+        "Godox": true,
+        "Knowled": true
+    },
+    "enabled_models": {}
+}

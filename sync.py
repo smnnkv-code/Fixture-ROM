@@ -34,6 +34,35 @@ except ImportError:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LINKS_FILE = os.path.join(SCRIPT_DIR, "links.md")
 LOCAL_DOWNLOADS_ROOT = os.path.expanduser("~/Documents/FixtureROM/Downloads")
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+
+def load_config():
+    """
+    Загружает настройки из config.json. Если файла нет, возвращает дефолтные.
+    """
+    default_config = {
+        "enabled_categories": {"firmware": True, "dmx": True},
+        "enabled_brands": {
+            "Aputure": True, "Amaran": True, "Nanlite": True, 
+            "Nanlux": True, "Godox": True, "Knowled": True
+        },
+        "enabled_models": {}
+    }
+    if not os.path.exists(CONFIG_FILE):
+        return default_config
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            user_config = json.load(f)
+        for k, v in default_config.items():
+            if k not in user_config:
+                user_config[k] = v
+            elif isinstance(v, dict):
+                for sub_k, sub_v in v.items():
+                    if sub_k not in user_config[k]:
+                        user_config[k][sub_k] = sub_v
+        return user_config
+    except Exception:
+        return default_config
 
 def get_usb_root():
     """
@@ -607,9 +636,12 @@ def scrape_custom_sources():
         print(f"⚠️ Ошибка чтения custom_scrapers.json: {e}")
         return []
         
+    config = load_config()
     all_items = []
     for s in scrapers:
         brand = s.get("brand")
+        if not config.get("enabled_brands", {}).get(brand, True):
+            continue
         url = s.get("url")
         file_types = s.get("file_types", [".zip", ".bin", ".pdf"])
         keywords = [k.strip().lower() for k in s.get("keyword_filter", "").split(",") if k.strip()]
@@ -681,53 +713,77 @@ def main():
     manual_items = parse_links_file(LINKS_FILE)
     print(f"✅ Из links.md успешно получено ссылок: {GREEN}{len(manual_items)}{RESET}\n")
     
-    # 2. Автоматическое сканирование сайтов
-    print(f"🌐 {BOLD}Сканирование сайтов производителей (поиск всех моделей)...{RESET}")
+    # 2. Загрузка конфигурации и сканирование сайтов
+    config = load_config()
+    print(f"🌐 {BOLD}Сканирование сайтов производителей (поиск моделей)...{RESET}")
+    
+    enabled_brands = config.get("enabled_brands", {})
     
     # Aputure & Amaran
-    sys.stdout.write("    - Сканирование Aputure / Amaran...")
-    sys.stdout.flush()
-    aputure_items = scrape_aputure_links()
-    print(f"\r    - Aputure / Amaran: найдено {GREEN}{len(aputure_items)}{RESET} файлов.")
-    
+    aputure_items = []
+    run_aputure = enabled_brands.get("Aputure", True) or enabled_brands.get("Amaran", True)
+    if run_aputure:
+        sys.stdout.write("    - Сканирование Aputure / Amaran...")
+        sys.stdout.flush()
+        aputure_items = scrape_aputure_links()
+        print(f"\r    - Aputure / Amaran: найдено {GREEN}{len(aputure_items)}{RESET} файлов.")
+    else:
+        print("    - Сканирование Aputure / Amaran: пропущено (отключено в настройках).")
+        
     # Nanlite
-    sys.stdout.write("    - Сканирование Nanlite...")
-    sys.stdout.flush()
-    nanlite_items = scrape_nanlink_api("nanlite", "Nanlite")
-    print(f"\r    - Nanlite: найдено {GREEN}{len(nanlite_items)}{RESET} файлов.")
-    
+    nanlite_items = []
+    if enabled_brands.get("Nanlite", True):
+        sys.stdout.write("    - Сканирование Nanlite...")
+        sys.stdout.flush()
+        nanlite_items = scrape_nanlink_api("nanlite", "Nanlite")
+        print(f"\r    - Nanlite: найдено {GREEN}{len(nanlite_items)}{RESET} файлов.")
+    else:
+        print("    - Сканирование Nanlite: пропущено (отключено в настройках).")
+        
     # Nanlux
-    sys.stdout.write("    - Сканирование Nanlux...")
-    sys.stdout.flush()
-    nanlux_items = scrape_nanlink_api("nanlux", "Nanlux")
-    print(f"\r    - Nanlux: найдено {GREEN}{len(nanlux_items)}{RESET} файлов.")
-    
+    nanlux_items = []
+    if enabled_brands.get("Nanlux", True):
+        sys.stdout.write("    - Сканирование Nanlux...")
+        sys.stdout.flush()
+        nanlux_items = scrape_nanlink_api("nanlux", "Nanlux")
+        print(f"\r    - Nanlux: найдено {GREEN}{len(nanlux_items)}{RESET} файлов.")
+    else:
+        print("    - Сканирование Nanlux: пропущено (отключено в настройках).")
+        
     # Godox
-    sys.stdout.write("    - Сканирование Godox...")
-    sys.stdout.flush()
-    godox_pages = [
-        "/firmware-continuous-light/",
-        "/firmware-continuous-light_2/",
-        "/firmware-continuous-light_3/",
-        "/firmware-control-system/",
-        "/firmware-launcher-installers/"
-    ]
-    godox_items = scrape_godox_style_pages("https://www.godox.com", godox_pages, "Godox")
-    print(f"\r    - Godox: найдено {GREEN}{len(godox_items)}{RESET} файлов.")
-    
+    godox_items = []
+    if enabled_brands.get("Godox", True):
+        sys.stdout.write("    - Сканирование Godox...")
+        sys.stdout.flush()
+        godox_pages = [
+            "/firmware-continuous-light/",
+            "/firmware-continuous-light_2/",
+            "/firmware-continuous-light_3/",
+            "/firmware-control-system/",
+            "/firmware-launcher-installers/"
+        ]
+        godox_items = scrape_godox_style_pages("https://www.godox.com", godox_pages, "Godox")
+        print(f"\r    - Godox: найдено {GREEN}{len(godox_items)}{RESET} файлов.")
+    else:
+        print("    - Сканирование Godox: пропущено (отключено в настройках).")
+        
     # Knowled
-    sys.stdout.write("    - Сканирование Knowled...")
-    sys.stdout.flush()
-    knowled_pages = [
-        "/firmware-knowled/",
-        "/firmware-knowled_2/",
-        "/firmware-knowled_3/",
-        "/firmware-knowled_4/",
-        "/firmware-knowled_5/"
-    ]
-    knowled_items = scrape_godox_style_pages("https://www.knowled.com", knowled_pages, "Knowled")
-    print(f"\r    - Knowled: найдено {GREEN}{len(knowled_items)}{RESET} файлов.")
-    
+    knowled_items = []
+    if enabled_brands.get("Knowled", True):
+        sys.stdout.write("    - Сканирование Knowled...")
+        sys.stdout.flush()
+        knowled_pages = [
+            "/firmware-knowled/",
+            "/firmware-knowled_2/",
+            "/firmware-knowled_3/",
+            "/firmware-knowled_4/",
+            "/firmware-knowled_5/"
+        ]
+        knowled_items = scrape_godox_style_pages("https://www.knowled.com", knowled_pages, "Knowled")
+        print(f"\r    - Knowled: найдено {GREEN}{len(knowled_items)}{RESET} файлов.")
+    else:
+        print("    - Сканирование Knowled: пропущено (отключено в настройках).")
+        
     # Пользовательские источники
     sys.stdout.write("    - Сканирование пользовательских источников...")
     sys.stdout.flush()
@@ -746,8 +802,45 @@ def main():
         if url not in seen_urls and item.get("category"):
             seen_urls[url] = item
             
-    final_items = list(seen_urls.values())
-    print(f"\n{GREEN}✅ Сканирование завершено!{RESET} Итого уникальных файлов для синхронизации: {BOLD}{len(final_items)}{RESET}\n")
+    raw_final_items = list(seen_urls.values())
+    
+    # Фильтрация по категориям, брендам и моделям
+    filtered_items = []
+    enabled_categories = config.get("enabled_categories", {"firmware": True, "dmx": True})
+    enabled_models = config.get("enabled_models", {})
+    
+    for item in raw_final_items:
+        brand = item["brand"]
+        category = item["category"]
+        url = item["url"]
+        desc = item["description"]
+        
+        # 1. Фильтр брендов
+        if not enabled_brands.get(brand, True):
+            continue
+            
+        # 2. Фильтр категорий
+        if category == "01_Firmware" and not enabled_categories.get("firmware", True):
+            continue
+        if category == "02_DMX_Charts" and not enabled_categories.get("dmx", True):
+            continue
+            
+        # 3. Фильтр моделей
+        raw_filename = clean_filename(url)
+        model, version = clean_model_and_version(desc, brand)
+        if not model:
+            model = os.path.splitext(raw_filename)[0].upper()
+            model = re.sub(rf'\b{brand.upper()}\b', '', model).strip()
+            model = re.sub(r'[\s\-_]+$', '', model).strip()
+            
+        brand_models = enabled_models.get(brand, [])
+        if brand_models and model not in brand_models:
+            continue
+            
+        filtered_items.append(item)
+        
+    final_items = filtered_items
+    print(f"\n{GREEN}✅ Сканирование завершено!{RESET} Итого уникальных файлов для синхронизации (с учетом фильтров): {BOLD}{len(final_items)}{RESET} (всего найдено: {len(raw_final_items)})\n")
     
     # Автоматически генерируем/обновляем metadata.json для rename.py
     db = {}

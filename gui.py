@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 # --- Константы путей ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_DOWNLOADS_ROOT = os.path.expanduser("~/Documents/FixtureROM/Downloads")
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 
 def get_usb_root():
     """
@@ -48,6 +49,65 @@ def get_usb_root():
         if os.path.exists(mac_path) and os.path.isdir(mac_path):
             return mac_path
         return None
+
+def clean_model_and_version(description, brand):
+    """
+    Извлекает имя модели и версию из описания.
+    Аналогично sync.py для синхронизации вычислений моделей.
+    """
+    desc = description.strip()
+    desc = re.sub(r'^автоматически\s+найденный\s+файл\s*\(', '', desc, flags=re.IGNORECASE).strip()
+    if desc.endswith(')'):
+        desc = desc[:-1].strip()
+
+    version = ""
+    v_match = re.search(r'(?:\b|_)(v?\d+(?:\.\d+)+)\b', desc, re.IGNORECASE)
+    if v_match:
+        version = v_match.group(1)
+        start_idx = v_match.start(1)
+        if start_idx > 0 and desc[start_idx-1] in ['_', '-', ' ']:
+            start_idx -= 1
+        desc = desc[:start_idx] + desc[v_match.end():]
+        
+    desc = re.sub(rf'\b{brand}\b', '', desc, flags=re.IGNORECASE).strip()
+    desc = re.sub(r'\b(firmware|user\s+manual|manual|dmx\s+charts|dmx\s+chart|dmx\s+profile|dmx\s+specification|dmx|practical\s+table|table|specification|profile)\b.*$', '', desc, flags=re.IGNORECASE).strip()
+    desc = re.sub(r'[\s\-_\/]+$', '', desc).strip()
+    desc = re.sub(r'^[\s\-_\/]+', '', desc).strip()
+    model = desc.upper()
+    model = model.replace('_', ' ').replace('  ', ' ').strip()
+    return model, version
+
+def get_all_models_from_db():
+    """
+    Парсит metadata.json и возвращает список уникальных моделей приборов по брендам.
+    """
+    db_path = os.path.join(LOCAL_DOWNLOADS_ROOT, "metadata.json")
+    if not os.path.exists(db_path):
+        return {}
+    try:
+        with open(db_path, "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except Exception:
+        return {}
+        
+    models_by_brand = {}
+    for raw_fn, info in db.items():
+        brand = info.get("brand")
+        desc = info.get("description", "")
+        if not brand:
+            continue
+        model, _ = clean_model_and_version(desc, brand)
+        if not model:
+            model = os.path.splitext(raw_fn)[0].upper()
+            model = re.sub(rf'\b{brand.upper()}\b', '', model).strip()
+            model = re.sub(r'[\s\-_]+$', '', model).strip()
+            
+        models_by_brand.setdefault(brand, set()).add(model)
+        
+    sorted_models = {}
+    for brand, models in models_by_brand.items():
+        sorted_models[brand] = sorted(list(models))
+    return sorted_models
 
 # Состояние синхронизации
 sync_logs = []
@@ -504,6 +564,45 @@ HTML_CONTENT = """<!DOCTYPE html>
                 </button>
             </div>
 
+            <!-- Сайдбар Карточка Фильтрации -->
+            <div class="card" style="margin-top: 4px;">
+                <div class="card-title">Фильтрация</div>
+                <div style="margin-bottom: 16px;">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Категории файлов</div>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 8px; cursor: pointer;">
+                        <input type="checkbox" id="filter-cat-fw" onchange="saveSidebarConfig()" checked>
+                        Прошивки (Firmware)
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer;">
+                        <input type="checkbox" id="filter-cat-dmx" onchange="saveSidebarConfig()" checked>
+                        DMX-карты (DMX Charts)
+                    </label>
+                </div>
+                <div>
+                    <div style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Сайты брендов</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-aputure" onchange="saveSidebarConfig()" checked> Aputure
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-amaran" onchange="saveSidebarConfig()" checked> Amaran
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-nanlite" onchange="saveSidebarConfig()" checked> Nanlite
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-nanlux" onchange="saveSidebarConfig()" checked> Nanlux
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-godox" onchange="saveSidebarConfig()" checked> Godox
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-knowled" onchange="saveSidebarConfig()" checked> Knowled
+                        </label>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-title">Статистика кэша Mac</div>
                 <div class="stats-grid">
@@ -526,7 +625,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         <div class="workspace">
             <div class="tabs-header">
                 <button id="tab-btn-console" class="tab-btn active" onclick="switchTab('console')">Лог консоли</button>
-                <button id="tab-btn-files" class="tab-btn" onclick="switchTab('files')">База файлов на Mac</button>
+                <button id="tab-btn-files" class="tab-btn" onclick="switchTab('files')">База приборов и файлов</button>
                 <button id="tab-btn-scrapers" class="tab-btn" onclick="switchTab('scrapers')">Настройка автопоиска</button>
             </div>
 
@@ -545,6 +644,23 @@ HTML_CONTENT = """<!DOCTYPE html>
 
             <!-- Вкладка База файлов -->
             <div id="tab-files" class="tab-content">
+                <!-- Встроенная панель выбора моделей устройств -->
+                <div class="card" style="margin-bottom: 16px; padding: 18px 24px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleModelsPanel()">
+                        <div class="card-title" style="margin-bottom: 0; font-size: 15px; color: var(--text-main); font-weight: 600;">⚙️ Выбор моделей приборов для синхронизации</div>
+                        <span id="models-panel-arrow" style="font-size: 14px; color: var(--text-muted);">▶</span>
+                    </div>
+                    <div id="models-panel-content" style="display: none; margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                        <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+                            <button class="btn btn-secondary" style="width: auto; padding: 6px 14px; font-size: 12px; margin: 0; border-radius: 8px;" onclick="selectAllModels(true)">Выбрать все</button>
+                            <button class="btn btn-secondary" style="width: auto; padding: 6px 14px; font-size: 12px; margin: 0; border-radius: 8px;" onclick="selectAllModels(false)">Снять выбор</button>
+                        </div>
+                        <div id="models-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; max-height: 250px; overflow-y: auto; padding-right: 8px;">
+                            <div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); font-size: 14px;">Загрузка списка моделей приборов...</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="search-container">
                     <input id="search-bar" type="text" class="search-input" placeholder="Поиск по модели, бренду или имени файла..." oninput="filterFiles()">
                 </div>
@@ -637,6 +753,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             
             if (tabId === 'files') {
                 loadFiles();
+                loadConfig();
             } else if (tabId === 'scrapers') {
                 loadScrapers();
             }
@@ -684,6 +801,152 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
             } catch (err) {
                 console.error("Ошибка обновления статуса:", err);
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                
+                const config = data.config;
+                const availableModels = data.models;
+                
+                // 1. Категории в сайдбаре
+                document.getElementById('filter-cat-fw').checked = config.enabled_categories.firmware;
+                document.getElementById('filter-cat-dmx').checked = config.enabled_categories.dmx;
+                
+                // 2. Бренды в сайдбаре
+                const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled'];
+                brands.forEach(b => {
+                    const el = document.getElementById(`filter-brand-${b.toLowerCase()}`);
+                    if (el) el.checked = config.enabled_brands[b] !== false;
+                });
+                
+                // 3. Модели приборов
+                renderModelsGrid(availableModels, config.enabled_models);
+            } catch (err) {
+                console.error("Ошибка загрузки конфигурации:", err);
+            }
+        }
+
+        async function saveSidebarConfig() {
+            const firmware = document.getElementById('filter-cat-fw').checked;
+            const dmx = document.getElementById('filter-cat-dmx').checked;
+            
+            const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled'];
+            const enabled_brands = {};
+            brands.forEach(b => {
+                const el = document.getElementById(`filter-brand-${b.toLowerCase()}`);
+                enabled_brands[b] = el ? el.checked : true;
+            });
+            
+            const enabled_models = getSelectedModelsFromGrid();
+            
+            const payload = {
+                enabled_categories: { firmware, dmx },
+                enabled_brands,
+                enabled_models
+            };
+            
+            await sendConfigSave(payload);
+        }
+
+        async function sendConfigSave(payload) {
+            try {
+                await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch (err) {
+                console.error("Ошибка сохранения конфигурации:", err);
+            }
+        }
+
+        function renderModelsGrid(availableModels, enabledModels) {
+            const grid = document.getElementById('models-grid');
+            if (!availableModels || Object.keys(availableModels).length === 0) {
+                grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); font-size: 14px; padding: 16px 0;">База приборов пуста. Запустите первую синхронизацию для сбора информации о моделях!</div>`;
+                return;
+            }
+            
+            let html = '';
+            for (const [brand, modelsList] of Object.entries(availableModels)) {
+                html += `
+                    <div style="grid-column: 1/-1; margin-top: 12px; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-weight: 600; color: var(--accent-primary); font-size: 13px; text-transform: uppercase;">${brand}</span>
+                    </div>
+                `;
+                modelsList.forEach(model => {
+                    const brandModels = enabledModels[brand] || [];
+                    const isChecked = brandModels.length === 0 || brandModels.includes(model);
+                    html += `
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 4px 0;" title="${model}">
+                            <input type="checkbox" class="model-checkbox" data-brand="${brand}" data-model="${model}" onchange="saveModelsConfig()" ${isChecked ? 'checked' : ''}>
+                            ${model}
+                        </label>
+                    `;
+                });
+            }
+            grid.innerHTML = html;
+        }
+
+        function getSelectedModelsFromGrid() {
+            const enabled_models = {};
+            document.querySelectorAll('.model-checkbox').forEach(cb => {
+                const brand = cb.getAttribute('data-brand');
+                const model = cb.getAttribute('data-model');
+                if (cb.checked) {
+                    enabled_models[brand] = enabled_models[brand] || [];
+                    enabled_models[brand].push(model);
+                } else {
+                    enabled_models[brand] = enabled_models[brand] || [];
+                }
+            });
+            return enabled_models;
+        }
+
+        async function saveModelsConfig() {
+            const firmware = document.getElementById('filter-cat-fw').checked;
+            const dmx = document.getElementById('filter-cat-dmx').checked;
+            
+            const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled'];
+            const enabled_brands = {};
+            brands.forEach(b => {
+                const el = document.getElementById(`filter-brand-${b.toLowerCase()}`);
+                enabled_brands[b] = el ? el.checked : true;
+            });
+            
+            const enabled_models = getSelectedModelsFromGrid();
+            
+            const payload = {
+                enabled_categories: { firmware, dmx },
+                enabled_brands,
+                enabled_models
+            };
+            
+            await sendConfigSave(payload);
+        }
+
+        function selectAllModels(state) {
+            document.querySelectorAll('.model-checkbox').forEach(cb => {
+                cb.checked = state;
+            });
+            saveModelsConfig();
+        }
+
+        let isModelsPanelOpen = false;
+        function toggleModelsPanel() {
+            const content = document.getElementById('models-panel-content');
+            const arrow = document.getElementById('models-panel-arrow');
+            isModelsPanelOpen = !isModelsPanelOpen;
+            if (isModelsPanelOpen) {
+                content.style.display = 'block';
+                arrow.innerText = '▼';
+            } else {
+                content.style.display = 'none';
+                arrow.innerText = '▶';
             }
         }
 
@@ -875,6 +1138,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         // Первичная загрузка
         updateStatus();
+        loadConfig();
         setInterval(updateStatus, 3000); // Опрос раз в 3 сек
         
         // Автоматически запускаем опрос логов при перезагрузке страницы, если уже идет синхронизация
@@ -996,6 +1260,35 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(scrapers_data).encode('utf-8'))
             
+        elif parsed_url.path == '/api/config':
+            # Читаем config.json
+            default_config = {
+                "enabled_categories": {"firmware": True, "dmx": True},
+                "enabled_brands": {
+                    "Aputure": True, "Amaran": True, "Nanlite": True, 
+                    "Nanlux": True, "Godox": True, "Knowled": True
+                },
+                "enabled_models": {}
+            }
+            config_data = default_config
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+                except Exception:
+                    pass
+            
+            # Получаем все уникальные модели устройств
+            available_models = get_all_models_from_db()
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "config": config_data,
+                "models": available_models
+            }).encode('utf-8'))
+            
         else:
             self.send_error(404, "Page Not Found")
 
@@ -1079,6 +1372,20 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             try:
                 with open(scrapers_file, "w", encoding="utf-8") as f:
                     json.dump(scrapers_data, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+                
+            self.send_response(200)
+            self.end_headers()
+            
+        elif parsed_url.path == '/api/config/save':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            payload = json.loads(post_data.decode('utf-8'))
+            
+            try:
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=4, ensure_ascii=False)
             except Exception:
                 pass
                 
