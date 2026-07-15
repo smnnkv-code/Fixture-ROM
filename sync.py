@@ -592,6 +592,85 @@ def notify_user_macos(new_files):
     except Exception as e:
         print(f"Ошибка вызова уведомления: {e}")
 
+def scrape_custom_sources():
+    """
+    Сканирует пользовательские сайты автопоиска из файла custom_scrapers.json
+    """
+    scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
+    if not os.path.exists(scrapers_file):
+        return []
+        
+    try:
+        with open(scrapers_file, "r", encoding="utf-8") as f:
+            scrapers = json.load(f)
+    except Exception as e:
+        print(f"⚠️ Ошибка чтения custom_scrapers.json: {e}")
+        return []
+        
+    all_items = []
+    for s in scrapers:
+        brand = s.get("brand")
+        url = s.get("url")
+        file_types = s.get("file_types", [".zip", ".bin", ".pdf"])
+        keywords = [k.strip().lower() for k in s.get("keyword_filter", "").split(",") if k.strip()]
+        
+        print(f"\n   - Автопоиск {brand} на {url}...")
+        try:
+            headers = {"User-Agent": USER_AGENT}
+            response = requests.get(url, headers=headers, timeout=20)
+            if response.status_code != 200:
+                print(f"     ❌ Код ответа: {response.status_code}")
+                continue
+                
+            try:
+                from bs4 import BeautifulSoup
+            except ImportError:
+                print("     ❌ Требуется библиотека beautifulsoup4. Установите: pip install beautifulsoup4")
+                continue
+                
+            soup = BeautifulSoup(response.text, "html.parser")
+            found_count = 0
+            
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                full_url = urllib.parse.urljoin(url, href)
+                
+                # Проверяем тип файла
+                parsed_path = urllib.parse.urlparse(full_url).path
+                ext = os.path.splitext(parsed_path)[1].lower()
+                if ext not in file_types:
+                    continue
+                    
+                # Получаем текст ссылки или описание
+                text = link.get_text().strip()
+                title_attr = link.get("title", "").strip()
+                desc = text if len(text) > 3 else (title_attr if title_attr else os.path.basename(parsed_path))
+                
+                # Фильтруем по ключевым словам
+                if keywords:
+                    matches_keywords = any(k in desc.lower() or k in full_url.lower() for k in keywords)
+                    if not matches_keywords:
+                        continue
+                        
+                # Классифицируем категорию
+                category = classify_category(full_url, desc)
+                if not category:
+                    continue
+                    
+                all_items.append({
+                    "url": full_url,
+                    "description": desc,
+                    "brand": brand,
+                    "category": category
+                })
+                found_count += 1
+                
+            print(f"     ✅ Завершено! Найдено новых файлов: {found_count}")
+        except Exception as e:
+            print(f"     ❌ Ошибка автопоиска: {e}")
+            
+    return all_items
+
 def main():
     print(f"\n{BOLD}{CYAN}================================================================{RESET}")
     print(f"{BOLD}{CYAN}⚡  FIXTURE_ROM | Автоматическая синхронизация прошивок и DMX  ⚡{RESET}")
@@ -649,8 +728,14 @@ def main():
     knowled_items = scrape_godox_style_pages("https://www.knowled.com", knowled_pages, "Knowled")
     print(f"\r    - Knowled: найдено {GREEN}{len(knowled_items)}{RESET} файлов.")
     
+    # Пользовательские источники
+    sys.stdout.write("    - Сканирование пользовательских источников...")
+    sys.stdout.flush()
+    custom_items = scrape_custom_sources()
+    print(f"\r    - Пользовательские источники: найдено {GREEN}{len(custom_items)}{RESET} файлов.")
+    
     # Слияние всех списков с исключением дубликатов по URL и фильтрацией пустых категорий
-    all_scraped = aputure_items + nanlite_items + nanlux_items + godox_items + knowled_items
+    all_scraped = aputure_items + nanlite_items + nanlux_items + godox_items + knowled_items + custom_items
     
     seen_urls = {}
     for item in manual_items:

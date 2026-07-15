@@ -436,7 +436,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         tr:hover td {
-            background: rgba(255,255,255,0.02);
+            background: rgba(255, 255, 255, 0.02);
         }
 
         .badge {
@@ -527,6 +527,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="tabs-header">
                 <button id="tab-btn-console" class="tab-btn active" onclick="switchTab('console')">Лог консоли</button>
                 <button id="tab-btn-files" class="tab-btn" onclick="switchTab('files')">База файлов на Mac</button>
+                <button id="tab-btn-scrapers" class="tab-btn" onclick="switchTab('scrapers')">Настройка автопоиска</button>
             </div>
 
             <!-- Вкладка Консоль -->
@@ -564,6 +565,60 @@ HTML_CONTENT = """<!DOCTYPE html>
                     </table>
                 </div>
             </div>
+
+            <!-- Вкладка Настройка автопоиска -->
+            <div id="tab-scrapers" class="tab-content">
+                <div class="card" style="margin-bottom: 8px;">
+                    <div class="card-title">Добавить новый сайт для автопоиска</div>
+                    <form id="scraper-form" onsubmit="addScraper(event)" style="display: flex; flex-direction: column; gap: 16px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                <label style="font-size: 14px; color: var(--text-muted);">Название бренда:</label>
+                                <input id="sc-brand" type="text" class="search-input" placeholder="Например: Astera" required>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                <label style="font-size: 14px; color: var(--text-muted);">Адрес страницы скачивания (URL):</label>
+                                <input id="sc-url" type="url" class="search-input" placeholder="https://asteraled.com/downloads" required>
+                            </div>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                <label style="font-size: 14px; color: var(--text-muted);">Типы файлов (через запятую):</label>
+                                <input id="sc-types" type="text" class="search-input" value=".zip, .bin, .pdf" required>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                <label style="font-size: 14px; color: var(--text-muted);">Фильтр по ключевым словам (через запятую):</label>
+                                <input id="sc-keywords" type="text" class="search-input" placeholder="dmx, firmware, update (необязательно)">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="align-self: flex-end; width: auto; padding: 12px 30px;">
+                            ➕ Добавить источник
+                        </button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Активные пользовательские источники</div>
+                    <div class="files-table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Бренд</th>
+                                    <th>URL сайта</th>
+                                    <th>Типы файлов</th>
+                                    <th>Ключевые слова</th>
+                                    <th style="text-align: right;">Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody id="scrapers-table-body">
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: var(--text-muted);">Загрузка списка источников...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -582,6 +637,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             
             if (tabId === 'files') {
                 loadFiles();
+            } else if (tabId === 'scrapers') {
+                loadScrapers();
             }
         }
 
@@ -671,6 +728,86 @@ HTML_CONTENT = """<!DOCTYPE html>
             renderFiles(filtered);
         }
 
+        async function loadScrapers() {
+            try {
+                const response = await fetch('/api/scrapers');
+                const scrapers = await response.json();
+                renderScrapers(scrapers);
+            } catch (err) {
+                console.error("Ошибка загрузки скраперов:", err);
+            }
+        }
+
+        function renderScrapers(scrapers) {
+            const tbody = document.getElementById('scrapers-table-body');
+            if (scrapers.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Пользовательские источники не добавлены. Заполните форму выше для автопоиска по новому сайту!</td></tr>`;
+                return;
+            }
+            
+            tbody.innerHTML = scrapers.map((s, idx) => {
+                return `
+                    <tr>
+                        <td><span style="font-weight: 600;">${s.brand}</span></td>
+                        <td style="font-size: 13px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            <a href="${s.url}" target="_blank" style="color: var(--accent-primary); text-decoration: none;">${s.url}</a>
+                        </td>
+                        <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">${s.file_types.join(', ')}</td>
+                        <td style="font-size: 13px;">${s.keyword_filter ? s.keyword_filter : '<span style="color: var(--text-muted);">нет</span>'}</td>
+                        <td style="text-align: right;">
+                            <button onclick="deleteScraper(${idx})" style="background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger-color); color: var(--danger-color); padding: 6px 12px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s;">Удалить</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function addScraper(event) {
+            event.preventDefault();
+            const brandInput = document.getElementById('sc-brand');
+            const urlInput = document.getElementById('sc-url');
+            const typesInput = document.getElementById('sc-types');
+            const keywordsInput = document.getElementById('sc-keywords');
+
+            const brand = brandInput.value.trim();
+            const url = urlInput.value.trim();
+            const file_types = typesInput.value.split(',').map(t => t.trim().toLowerCase());
+            const keyword_filter = keywordsInput.value.trim();
+
+            const payload = { brand, url, file_types, keyword_filter };
+
+            try {
+                const response = await fetch('/api/scrapers/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (response.ok) {
+                    document.getElementById('scraper-form').reset();
+                    typesInput.value = ".zip, .bin, .pdf";
+                    loadScrapers();
+                }
+            } catch (err) {
+                console.error("Ошибка добавления источника:", err);
+            }
+        }
+
+        async function deleteScraper(index) {
+            if (!confirm("Вы уверены, что хотите удалить этот источник автопоиска?")) return;
+            try {
+                const response = await fetch('/api/scrapers/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index })
+                });
+                if (response.ok) {
+                    loadScrapers();
+                }
+            } catch (err) {
+                console.error("Ошибка удаления источника:", err);
+            }
+        }
+
         async function startSync() {
             if (isSyncing) return;
             
@@ -714,7 +851,6 @@ HTML_CONTENT = """<!DOCTYPE html>
                     
                     if (data.lines && data.lines.length > 0) {
                         data.lines.forEach(line => {
-                            // Игнорируем длинные перерисовки прогресс-баров, чтобы не засорять консоль
                             if (line.includes('\\r') && !line.includes('\\n')) return;
                             consoleBody.innerHTML += formatLogLine(line);
                         });
@@ -725,7 +861,6 @@ HTML_CONTENT = """<!DOCTYPE html>
                     if (!data.is_syncing && logOffset > 0) {
                         clearInterval(pollInterval);
                         updateStatus();
-                        // Если вкладка базы открыта, обновляем список файлов
                         if (activeTab === 'files') loadFiles();
                     }
                 } catch (err) {
@@ -755,7 +890,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 
 class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Отключаем дефолтные логи запросов в терминал, чтобы не мешать
         return
 
     def do_GET(self):
@@ -841,13 +975,26 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 "category": category
                             })
                             
-            # Сортируем по бренду, затем по имени
             files_list.sort(key=lambda x: (x["brand"], x["filename"]))
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(files_list).encode('utf-8'))
+            
+        elif parsed_url.path == '/api/scrapers':
+            scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
+            scrapers_data = []
+            if os.path.exists(scrapers_file):
+                try:
+                    with open(scrapers_file, "r", encoding="utf-8") as f:
+                        scrapers_data = json.load(f)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(scrapers_data).encode('utf-8'))
             
         else:
             self.send_error(404, "Page Not Found")
@@ -866,7 +1013,6 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             is_syncing = True
             sync_logs.clear()
             
-            # Запускаем sync.py в фоновом потоке
             sync_thread = threading.Thread(target=run_sync_process)
             sync_thread.daemon = True
             sync_thread.start()
@@ -877,7 +1023,6 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "started"}).encode('utf-8'))
             
         elif parsed_url.path == '/api/open':
-            # Открываем Finder / Explorer
             try:
                 if sys.platform == "win32":
                     os.startfile(LOCAL_DOWNLOADS_ROOT)
@@ -888,6 +1033,58 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             
+        elif parsed_url.path == '/api/scrapers/add':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            payload = json.loads(post_data.decode('utf-8'))
+            
+            scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
+            scrapers_data = []
+            if os.path.exists(scrapers_file):
+                try:
+                    with open(scrapers_file, "r", encoding="utf-8") as f:
+                        scrapers_data = json.load(f)
+                except Exception:
+                    pass
+                    
+            scrapers_data.append(payload)
+            
+            try:
+                with open(scrapers_file, "w", encoding="utf-8") as f:
+                    json.dump(scrapers_data, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+                
+            self.send_response(200)
+            self.end_headers()
+            
+        elif parsed_url.path == '/api/scrapers/delete':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            payload = json.loads(post_data.decode('utf-8'))
+            index_to_delete = payload.get("index")
+            
+            scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
+            scrapers_data = []
+            if os.path.exists(scrapers_file):
+                try:
+                    with open(scrapers_file, "r", encoding="utf-8") as f:
+                        scrapers_data = json.load(f)
+                except Exception:
+                    pass
+                    
+            if index_to_delete is not None and 0 <= index_to_delete < len(scrapers_data):
+                scrapers_data.pop(index_to_delete)
+                
+            try:
+                with open(scrapers_file, "w", encoding="utf-8") as f:
+                    json.dump(scrapers_data, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+                
+            self.send_response(200)
+            self.end_headers()
+            
         else:
             self.send_error(404, "Not Found")
 
@@ -895,7 +1092,6 @@ def run_sync_process():
     global is_syncing, sync_logs
     sync_script_path = os.path.join(SCRIPT_DIR, "sync.py")
     
-    # Запускаем sync.py с небуферизованным выводом (-u)
     process = subprocess.Popen(
         [sys.executable, "-u", sync_script_path],
         stdout=subprocess.PIPE,
@@ -921,7 +1117,6 @@ def main():
     print(f"\n⚡ FIXTURE_ROM Dashboard Server ⚡")
     print(f"==================================================")
     
-    # Пытаемся запустить сервер. Если порт 8080 занят, ищем следующий свободный.
     server = None
     for port in range(PORT, PORT + 20):
         try:
@@ -941,7 +1136,6 @@ def main():
     print(f"🛑 Для остановки нажмите Ctrl + C")
     print(f"==================================================\n")
     
-    # Автоматически открываем браузер
     webbrowser.open(url)
     
     try:
