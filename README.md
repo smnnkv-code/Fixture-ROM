@@ -37,12 +37,12 @@
 ## 📸 Интерфейс панели управления (Dashboard)
 
 <p align="center">
-  <img src="docs/screenshots/Console.png" width="100%" alt="Лог консоли" />
+  <img src="docs/screenshots/Console_v2.png" width="100%" alt="Лог консоли" />
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/File%20database.png" width="49%" alt="База файлов" />
-  <img src="docs/screenshots/Auto-search%20settings.png" width="49%" alt="Настройки автопоиска" />
+  <img src="docs/screenshots/File_database_v2.png" width="49%" alt="База файлов" />
+  <img src="docs/screenshots/Auto-search_settings_v2.png" width="49%" alt="Настройки автопоиска" />
 </p>
 
 ---
