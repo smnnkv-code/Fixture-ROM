@@ -21,61 +21,51 @@ from urllib.parse import parse_qs, urlparse
 
 # --- Константы путей ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCAL_DOWNLOADS_ROOT = os.path.expanduser("~/Documents/FixtureROM/Downloads")
+LOCAL_DOWNLOADS_ROOT = os.path.join(SCRIPT_DIR, "Downloads")
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+SNAPSHOTS_DIR = os.path.join(SCRIPT_DIR, "Snapshots")
+STATS_FILE = os.path.join(SNAPSHOTS_DIR, "sync_stats.json")
 
-def get_usb_root():
-    """
-    Определяет путь к флешке FIXTURE_ROM на macOS и Windows.
-    """
-    if sys.platform == "win32":
+# Глобальная переменная для хранения статистики
+sync_stats_data = {
+    "last_cached_run_duration": None,
+    "last_empty_run_duration": None,
+    "last_run_download_count": None,
+    "history_cached_durations": [],
+    "history_empty_durations": [],
+    "average_cached_duration": None,
+    "average_empty_duration": None
+}
+
+def load_sync_stats():
+    """Загружает статистику выполнения из файла."""
+    global sync_stats_data
+    if os.path.exists(STATS_FILE):
         try:
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            volumeNameBuffer = ctypes.create_unicode_buffer(1024)
-            for letter in "EFGHIJKLMNOPQRSTUVWXYZD":
-                drive = f"{letter}:\\"
-                if os.path.exists(drive):
-                    res = kernel32.GetVolumeInformationW(
-                        drive, volumeNameBuffer, 1024, None, None, None, None, 0
-                    )
-                    if res and volumeNameBuffer.value == "FIXTURE_ROM":
-                        return drive
+            with open(STATS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    sync_stats_data.update(data)
         except Exception:
             pass
-        return None
-    else:
-        mac_path = "/Volumes/FIXTURE_ROM"
-        if os.path.exists(mac_path) and os.path.isdir(mac_path):
-            return mac_path
-        return None
 
-def clean_model_and_version(description, brand):
-    """
-    Извлекает имя модели и версию из описания.
-    Аналогично sync.py для синхронизации вычислений моделей.
-    """
-    desc = description.strip()
-    desc = re.sub(r'^автоматически\s+найденный\s+файл\s*\(', '', desc, flags=re.IGNORECASE).strip()
-    if desc.endswith(')'):
-        desc = desc[:-1].strip()
+# Сразу загружаем при старте
+load_sync_stats()
 
-    version = ""
-    v_match = re.search(r'(?:\b|_)(v?\d+(?:\.\d+)+)\b', desc, re.IGNORECASE)
-    if v_match:
-        version = v_match.group(1)
-        start_idx = v_match.start(1)
-        if start_idx > 0 and desc[start_idx-1] in ['_', '-', ' ']:
-            start_idx -= 1
-        desc = desc[:start_idx] + desc[v_match.end():]
-        
-    desc = re.sub(rf'\b{brand}\b', '', desc, flags=re.IGNORECASE).strip()
-    desc = re.sub(r'\b(firmware|user\s+manual|manual|dmx\s+charts|dmx\s+chart|dmx\s+profile|dmx\s+specification|dmx|practical\s+table|table|specification|profile)\b.*$', '', desc, flags=re.IGNORECASE).strip()
-    desc = re.sub(r'[\s\-_\/]+$', '', desc).strip()
-    desc = re.sub(r'^[\s\-_\/]+', '', desc).strip()
-    model = desc.upper()
-    model = model.replace('_', ' ').replace('  ', ' ').strip()
-    return model, version
+from rom_common import get_usb_root, clean_model_and_version
+
+def get_clean_fallback_model(raw_filename, brand):
+    """
+    Извлекает чистое имя модели из имени файла, если нет описания.
+    Аналогично sync.py.
+    """
+    base = os.path.splitext(raw_filename)[0]
+    model, _ = clean_model_and_version(base, brand)
+    if not model:
+        model = base.upper()
+        model = re.sub(rf'\b{brand.upper()}\b', '', model).strip()
+        model = re.sub(r'[\s\-_]+$', '', model).strip()
+    return model
 
 def get_all_models_from_db():
     """
@@ -98,9 +88,7 @@ def get_all_models_from_db():
             continue
         model, _ = clean_model_and_version(desc, brand)
         if not model:
-            model = os.path.splitext(raw_fn)[0].upper()
-            model = re.sub(rf'\b{brand.upper()}\b', '', model).strip()
-            model = re.sub(r'[\s\-_]+$', '', model).strip()
+            model = get_clean_fallback_model(raw_fn, brand)
             
         models_by_brand.setdefault(brand, set()).add(model)
         
@@ -113,6 +101,7 @@ def get_all_models_from_db():
 sync_logs = []
 is_syncing = False
 sync_thread = None
+sync_lock = threading.Lock()  # защита is_syncing от гонки между потоками
 
 # Шаблон HTML с премиальным дизайном (Glassmorphism, Dark Mode, Google Fonts)
 HTML_CONTENT = """<!DOCTYPE html>
@@ -599,6 +588,39 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
                             <input type="checkbox" id="filter-brand-knowled" onchange="saveSidebarConfig()" checked> Knowled
                         </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-arri" onchange="saveSidebarConfig()" checked> ARRI
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-astera" onchange="saveSidebarConfig()" checked> Astera
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-creamsource" onchange="saveSidebarConfig()" checked> Creamsource
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-gvm" onchange="saveSidebarConfig()" checked> GVM
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-litegear" onchange="saveSidebarConfig()" checked> LiteGear
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-lightstar" onchange="saveSidebarConfig()" checked> Lightstar
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-litepanels" onchange="saveSidebarConfig()" checked> Litepanels
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-quasar-science" onchange="saveSidebarConfig()" checked> Quasar Science
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-kino-flo" onchange="saveSidebarConfig()" checked> Kino Flo
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-pipe-lighting" onchange="saveSidebarConfig()" checked> Pipe Lighting
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="filter-brand-pheon-lux" onchange="saveSidebarConfig()" checked> Pheon Lux
+                        </label>
                     </div>
                 </div>
             </div>
@@ -626,11 +648,38 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="tabs-header">
                 <button id="tab-btn-console" class="tab-btn active" onclick="switchTab('console')">Лог консоли</button>
                 <button id="tab-btn-files" class="tab-btn" onclick="switchTab('files')">База приборов и файлов</button>
-                <button id="tab-btn-scrapers" class="tab-btn" onclick="switchTab('scrapers')">Настройка автопоиска</button>
             </div>
 
             <!-- Вкладка Консоль -->
             <div id="tab-console" class="tab-content active">
+                <!-- Блок времени выполнения синхронизации -->
+                <div class="stats-card-container" style="display: flex; gap: 16px; margin-bottom: 16px;">
+                    <div class="card" style="flex: 1; padding: 14px 18px; display: flex; align-items: center; gap: 16px; margin-bottom: 0; border: 1px solid rgba(255,255,255,0.03);">
+                        <div style="font-size: 24px;">🔍</div>
+                        <div>
+                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600;">Сканирование источников (Source Scanning)</div>
+                            <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 2px;">
+                                <span id="stats-time-cached" style="font-size: 16px; font-weight: 700; color: var(--accent-primary);">--</span>
+                                <span id="stats-time-cached-avg" style="font-size: 10px; color: var(--text-muted); font-weight: 500;">(в среднем: ~75 сек)</span>
+                            </div>
+                            <div style="font-size: 10px; color: var(--text-muted); margin-top: 1px;">Проверка обновлений.</div>
+                            <div style="font-size: 10px; color: var(--text-muted); margin-top: 1px; font-weight: 500;">Режим: Энергосберегающий (без загрузки).</div>
+                        </div>
+                    </div>
+                    <div class="card" style="flex: 1; padding: 14px 18px; display: flex; align-items: center; gap: 16px; margin-bottom: 0; border: 1px solid rgba(255,255,255,0.03);">
+                        <div style="font-size: 24px;">📥</div>
+                        <div>
+                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600;">Полная загрузка (Full Sync Interval)</div>
+                            <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 2px;">
+                                <span id="stats-time-empty" style="font-size: 16px; font-weight: 700; color: var(--accent-primary);">--</span>
+                                <span id="stats-time-empty-avg" style="font-size: 10px; color: var(--text-muted); font-weight: 500;">(в среднем: ~300 сек)</span>
+                            </div>
+                            <div style="font-size: 10px; color: var(--text-muted); margin-top: 1px;">Скачивание файлов.</div>
+                            <div style="font-size: 10px; color: var(--text-muted); margin-top: 1px; font-weight: 500;">Объем загрузки: <span id="stats-download-count" style="color: var(--text-main); font-weight: 600;">--</span> файлов.</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="console-container">
                     <div class="console-header">
                         <div class="console-title">sync_stdout.log</div>
@@ -681,60 +730,6 @@ HTML_CONTENT = """<!DOCTYPE html>
                     </table>
                 </div>
             </div>
-
-            <!-- Вкладка Настройка автопоиска -->
-            <div id="tab-scrapers" class="tab-content">
-                <div class="card" style="margin-bottom: 8px;">
-                    <div class="card-title">Добавить новый сайт для автопоиска</div>
-                    <form id="scraper-form" onsubmit="addScraper(event)" style="display: flex; flex-direction: column; gap: 16px;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                <label style="font-size: 14px; color: var(--text-muted);">Название бренда:</label>
-                                <input id="sc-brand" type="text" class="search-input" placeholder="Например: Astera" required>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                <label style="font-size: 14px; color: var(--text-muted);">Адрес страницы скачивания (URL):</label>
-                                <input id="sc-url" type="url" class="search-input" placeholder="https://asteraled.com/downloads" required>
-                            </div>
-                        </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                <label style="font-size: 14px; color: var(--text-muted);">Типы файлов (через запятую):</label>
-                                <input id="sc-types" type="text" class="search-input" value=".zip, .bin, .pdf" required>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                <label style="font-size: 14px; color: var(--text-muted);">Фильтр по ключевым словам (через запятую):</label>
-                                <input id="sc-keywords" type="text" class="search-input" placeholder="dmx, firmware, update (необязательно)">
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-primary" style="align-self: flex-end; width: auto; padding: 12px 30px;">
-                            ➕ Добавить источник
-                        </button>
-                    </form>
-                </div>
-
-                <div class="card">
-                    <div class="card-title">Активные пользовательские источники</div>
-                    <div class="files-table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Бренд</th>
-                                    <th>URL сайта</th>
-                                    <th>Типы файлов</th>
-                                    <th>Ключевые слова</th>
-                                    <th style="text-align: right;">Действие</th>
-                                </tr>
-                            </thead>
-                            <tbody id="scrapers-table-body">
-                                <tr>
-                                    <td colspan="5" style="text-align: center; color: var(--text-muted);">Загрузка списка источников...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
         </div>
     </main>
 
@@ -754,8 +749,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             if (tabId === 'files') {
                 loadFiles();
                 loadConfig();
-            } else if (tabId === 'scrapers') {
-                loadScrapers();
             }
         }
 
@@ -779,6 +772,22 @@ HTML_CONTENT = """<!DOCTYPE html>
                 document.getElementById('stat-fw').innerText = data.firmware_count;
                 document.getElementById('stat-dmx').innerText = data.dmx_count;
                 document.getElementById('stat-size').innerText = `${data.cache_size_mb} MB`;
+                
+                // Обновляем статистику времени выполнения
+                if (data.sync_stats) {
+                    const cachedTime = data.sync_stats.last_cached_run_duration;
+                    const emptyTime = data.sync_stats.last_empty_run_duration;
+                    const downloadCount = data.sync_stats.last_run_download_count;
+                    const avgCached = data.sync_stats.average_cached_duration;
+                    const avgEmpty = data.sync_stats.average_empty_duration;
+                    
+                    document.getElementById('stats-time-cached').innerText = cachedTime !== null ? `${cachedTime.toFixed(2)} сек` : '--';
+                    document.getElementById('stats-time-empty').innerText = emptyTime !== null ? `${emptyTime.toFixed(2)} сек` : '--';
+                    document.getElementById('stats-download-count').innerText = downloadCount !== null ? downloadCount : '--';
+                    
+                    document.getElementById('stats-time-cached-avg').innerText = avgCached !== null ? `(в среднем: ~${avgCached.toFixed(1)} сек)` : '(в среднем: ~75 сек)';
+                    document.getElementById('stats-time-empty-avg').innerText = avgEmpty !== null ? `(в среднем: ~${avgEmpty.toFixed(1)} сек)` : '(в среднем: ~300 сек)';
+                }
                 
                 // Статус синхронизации
                 const syncBtn = document.getElementById('sync-btn');
@@ -817,9 +826,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 document.getElementById('filter-cat-dmx').checked = config.enabled_categories.dmx;
                 
                 // 2. Бренды в сайдбаре
-                const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled'];
+                const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled', 'ARRI', 'Astera', 'Creamsource', 'GVM', 'LiteGear', 'Lightstar', 'Litepanels', 'Quasar Science', 'Kino Flo', 'Pipe Lighting', 'Pheon Lux'];
                 brands.forEach(b => {
-                    const el = document.getElementById(`filter-brand-${b.toLowerCase()}`);
+                    const el = document.getElementById(`filter-brand-${b.toLowerCase().replace(' ', '-')}`);
                     if (el) el.checked = config.enabled_brands[b] !== false;
                 });
                 
@@ -834,10 +843,10 @@ HTML_CONTENT = """<!DOCTYPE html>
             const firmware = document.getElementById('filter-cat-fw').checked;
             const dmx = document.getElementById('filter-cat-dmx').checked;
             
-            const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled'];
+            const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled', 'ARRI', 'Astera', 'Creamsource', 'GVM', 'LiteGear', 'Lightstar', 'Litepanels', 'Quasar Science', 'Kino Flo', 'Pipe Lighting', 'Pheon Lux'];
             const enabled_brands = {};
             brands.forEach(b => {
-                const el = document.getElementById(`filter-brand-${b.toLowerCase()}`);
+                const el = document.getElementById(`filter-brand-${b.toLowerCase().replace(' ', '-')}`);
                 enabled_brands[b] = el ? el.checked : true;
             });
             
@@ -911,10 +920,10 @@ HTML_CONTENT = """<!DOCTYPE html>
             const firmware = document.getElementById('filter-cat-fw').checked;
             const dmx = document.getElementById('filter-cat-dmx').checked;
             
-            const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled'];
+            const brands = ['Aputure', 'Amaran', 'Nanlite', 'Nanlux', 'Godox', 'Knowled', 'ARRI', 'Astera', 'Creamsource', 'GVM', 'LiteGear', 'Lightstar', 'Litepanels', 'Quasar Science', 'Kino Flo', 'Pipe Lighting', 'Pheon Lux'];
             const enabled_brands = {};
             brands.forEach(b => {
-                const el = document.getElementById(`filter-brand-${b.toLowerCase()}`);
+                const el = document.getElementById(`filter-brand-${b.toLowerCase().replace(' ', '-')}`);
                 enabled_brands[b] = el ? el.checked : true;
             });
             
@@ -991,85 +1000,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             renderFiles(filtered);
         }
 
-        async function loadScrapers() {
-            try {
-                const response = await fetch('/api/scrapers');
-                const scrapers = await response.json();
-                renderScrapers(scrapers);
-            } catch (err) {
-                console.error("Ошибка загрузки скраперов:", err);
-            }
-        }
 
-        function renderScrapers(scrapers) {
-            const tbody = document.getElementById('scrapers-table-body');
-            if (scrapers.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Пользовательские источники не добавлены. Заполните форму выше для автопоиска по новому сайту!</td></tr>`;
-                return;
-            }
-            
-            tbody.innerHTML = scrapers.map((s, idx) => {
-                return `
-                    <tr>
-                        <td><span style="font-weight: 600;">${s.brand}</span></td>
-                        <td style="font-size: 13px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                            <a href="${s.url}" target="_blank" style="color: var(--accent-primary); text-decoration: none;">${s.url}</a>
-                        </td>
-                        <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">${s.file_types.join(', ')}</td>
-                        <td style="font-size: 13px;">${s.keyword_filter ? s.keyword_filter : '<span style="color: var(--text-muted);">нет</span>'}</td>
-                        <td style="text-align: right;">
-                            <button onclick="deleteScraper(${idx})" style="background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger-color); color: var(--danger-color); padding: 6px 12px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s;">Удалить</button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-        }
-
-        async function addScraper(event) {
-            event.preventDefault();
-            const brandInput = document.getElementById('sc-brand');
-            const urlInput = document.getElementById('sc-url');
-            const typesInput = document.getElementById('sc-types');
-            const keywordsInput = document.getElementById('sc-keywords');
-
-            const brand = brandInput.value.trim();
-            const url = urlInput.value.trim();
-            const file_types = typesInput.value.split(',').map(t => t.trim().toLowerCase());
-            const keyword_filter = keywordsInput.value.trim();
-
-            const payload = { brand, url, file_types, keyword_filter };
-
-            try {
-                const response = await fetch('/api/scrapers/add', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (response.ok) {
-                    document.getElementById('scraper-form').reset();
-                    typesInput.value = ".zip, .bin, .pdf";
-                    loadScrapers();
-                }
-            } catch (err) {
-                console.error("Ошибка добавления источника:", err);
-            }
-        }
-
-        async function deleteScraper(index) {
-            if (!confirm("Вы уверены, что хотите удалить этот источник автопоиска?")) return;
-            try {
-                const response = await fetch('/api/scrapers/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ index })
-                });
-                if (response.ok) {
-                    loadScrapers();
-                }
-            } catch (err) {
-                console.error("Ошибка удаления источника:", err);
-            }
-        }
 
         async function startSync() {
             if (isSyncing) return;
@@ -1167,6 +1098,8 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             
         elif parsed_url.path == '/api/status':
             global is_syncing
+            with sync_lock:
+                sync_status = is_syncing
             usb_root = get_usb_root()
             usb_connected = usb_root is not None
             
@@ -1197,7 +1130,8 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "firmware_count": fw_count,
                 "dmx_count": dmx_count,
                 "cache_size_mb": cache_size_mb,
-                "is_syncing": is_syncing
+                "is_syncing": sync_status,
+                "sync_stats": sync_stats_data
             }
             
             self.send_response(200)
@@ -1230,14 +1164,27 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         brand_dir = os.path.join(cat_dir, brand)
                         if not os.path.isdir(brand_dir) or brand.startswith('.'):
                             continue
-                        for f in os.listdir(brand_dir):
-                            if f.startswith('.') or f == "metadata.json":
-                                continue
-                            files_list.append({
-                                "filename": f,
-                                "brand": brand,
-                                "category": category
-                            })
+                        
+                        brand_ui_name = brand
+                        if brand in ["Quasar_Science", "Quasar"]:
+                            brand_ui_name = "Quasar Science"
+                        elif brand in ["Kino_Flo", "KinoFlo"]:
+                            brand_ui_name = "Kino Flo"
+                        elif brand == "PipeLighting":
+                            brand_ui_name = "Pipe Lighting"
+                        elif brand == "PheonLux":
+                            brand_ui_name = "Pheon Lux"
+                            
+                        # Рекурсивный обход папки бренда для сбора реальных файлов
+                        for root, _, files in os.walk(brand_dir):
+                            for file in files:
+                                if file.startswith('.') or file == "metadata.json":
+                                    continue
+                                files_list.append({
+                                    "filename": file,
+                                    "brand": brand_ui_name,
+                                    "category": category
+                                })
                             
             files_list.sort(key=lambda x: (x["brand"], x["filename"]))
             
@@ -1245,20 +1192,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(files_list).encode('utf-8'))
-            
-        elif parsed_url.path == '/api/scrapers':
-            scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
-            scrapers_data = []
-            if os.path.exists(scrapers_file):
-                try:
-                    with open(scrapers_file, "r", encoding="utf-8") as f:
-                        scrapers_data = json.load(f)
-                except Exception:
-                    pass
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(scrapers_data).encode('utf-8'))
+
             
         elif parsed_url.path == '/api/config':
             # Читаем config.json
@@ -1266,7 +1200,10 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "enabled_categories": {"firmware": True, "dmx": True},
                 "enabled_brands": {
                     "Aputure": True, "Amaran": True, "Nanlite": True, 
-                    "Nanlux": True, "Godox": True, "Knowled": True
+                    "Nanlux": True, "Godox": True, "Knowled": True, "ARRI": True,
+                    "Astera": True, "Creamsource": True, "GVM": True, "LiteGear": True,
+                    "Lightstar": True, "Litepanels": True, "Quasar Science": True,
+                    "Kino Flo": True, "Pipe Lighting": True, "Pheon Lux": True
                 },
                 "enabled_models": {}
             }
@@ -1297,13 +1234,13 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         
         if parsed_url.path == '/api/sync':
             global is_syncing, sync_thread
-            if is_syncing:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"Already syncing")
-                return
-                
-            is_syncing = True
+            with sync_lock:
+                if is_syncing:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"Already syncing")
+                    return
+                is_syncing = True
             sync_logs.clear()
             
             sync_thread = threading.Thread(target=run_sync_process)
@@ -1325,70 +1262,61 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 pass
             self.send_response(200)
             self.end_headers()
-            
-        elif parsed_url.path == '/api/scrapers/add':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            payload = json.loads(post_data.decode('utf-8'))
-            
-            scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
-            scrapers_data = []
-            if os.path.exists(scrapers_file):
-                try:
-                    with open(scrapers_file, "r", encoding="utf-8") as f:
-                        scrapers_data = json.load(f)
-                except Exception:
-                    pass
-                    
-            scrapers_data.append(payload)
-            
-            try:
-                with open(scrapers_file, "w", encoding="utf-8") as f:
-                    json.dump(scrapers_data, f, indent=4, ensure_ascii=False)
-            except Exception:
-                pass
-                
-            self.send_response(200)
-            self.end_headers()
-            
-        elif parsed_url.path == '/api/scrapers/delete':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            payload = json.loads(post_data.decode('utf-8'))
-            index_to_delete = payload.get("index")
-            
-            scrapers_file = os.path.join(SCRIPT_DIR, "custom_scrapers.json")
-            scrapers_data = []
-            if os.path.exists(scrapers_file):
-                try:
-                    with open(scrapers_file, "r", encoding="utf-8") as f:
-                        scrapers_data = json.load(f)
-                except Exception:
-                    pass
-                    
-            if index_to_delete is not None and 0 <= index_to_delete < len(scrapers_data):
-                scrapers_data.pop(index_to_delete)
-                
-            try:
-                with open(scrapers_file, "w", encoding="utf-8") as f:
-                    json.dump(scrapers_data, f, indent=4, ensure_ascii=False)
-            except Exception:
-                pass
-                
-            self.send_response(200)
-            self.end_headers()
+
             
         elif parsed_url.path == '/api/config/save':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            payload = json.loads(post_data.decode('utf-8'))
-            
+            # Валидация входных данных
+            content_length_str = self.headers.get('Content-Length', '0')
+            try:
+                content_length = int(content_length_str)
+            except (ValueError, TypeError):
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid Content-Length")
+                return
+            if content_length < 0 or content_length > 2 ** 20:  # макс 1 MB
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Request entity too large")
+                return
+
+            try:
+                post_data = self.rfile.read(content_length)
+                payload = json.loads(post_data.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid JSON")
+                return
+
+            if not isinstance(payload, dict):
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Config must be a JSON object")
+                return
+
+            # Валидация структуры: проверяем типы ожидаемых полей
+            expected_fields = {
+                "enabled_categories": dict,
+                "enabled_brands": dict,
+                "enabled_models": dict,
+            }
+            for field, expected_type in expected_fields.items():
+                if field in payload and not isinstance(payload[field], expected_type):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(f"Field '{field}' must be a {expected_type.__name__}".encode('utf-8'))
+                    return
+
             try:
                 with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=4, ensure_ascii=False)
-            except Exception:
-                pass
-                
+            except (OSError, IOError) as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"Failed to write config: {e}".encode('utf-8'))
+                return
+
             self.send_response(200)
             self.end_headers()
             
@@ -1396,7 +1324,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
 def run_sync_process():
-    global is_syncing, sync_logs
+    global is_syncing, sync_logs, sync_stats_data
     sync_script_path = os.path.join(SCRIPT_DIR, "sync.py")
     
     process = subprocess.Popen(
@@ -1407,15 +1335,83 @@ def run_sync_process():
         bufsize=1
     )
     
+    link_checking_time = None
+    download_verification_time = None
+    is_empty_run = False
+    downloaded_files_count = None
+    total_time = None
+    
     while True:
         line = process.stdout.readline()
         if not line and process.poll() is not None:
             break
         if line:
-            sync_logs.append(line.rstrip('\n'))
+            clean_line = line.rstrip('\n')
+            sync_logs.append(clean_line)
+            
+            # Парсинг служебных логов времени
+            if clean_line.startswith("[TIME_STATS]"):
+                parts = clean_line.replace("[TIME_STATS] ", "").split(":")
+                if len(parts) == 2:
+                    key = parts[0].strip()
+                    val = parts[1].strip()
+                    try:
+                        if "Link checking" in key:
+                            link_checking_time = float(val.replace(" seconds", ""))
+                        elif "Downloading and hashing" in key:
+                            download_verification_time = float(val.replace(" seconds", ""))
+                        elif "Empty run" in key:
+                            is_empty_run = (val.lower() == "true")
+                        elif "Downloaded files" in key:
+                            downloaded_files_count = int(val)
+                        elif "Total" in key:
+                            total_time = float(val.replace(" seconds", ""))
+                    except ValueError:
+                        pass
             
     process.wait()
-    is_syncing = False
+    with sync_lock:
+        is_syncing = False
+    
+    # Сохраняем замеры в базу статистики
+    updated = False
+    
+    # Инициализация пустых массивов на случай старого JSON
+    if "history_cached_durations" not in sync_stats_data:
+        sync_stats_data["history_cached_durations"] = []
+    if "history_empty_durations" not in sync_stats_data:
+        sync_stats_data["history_empty_durations"] = []
+        
+    if is_empty_run:
+        if total_time is not None:
+            sync_stats_data["last_empty_run_duration"] = total_time
+            sync_stats_data["history_empty_durations"].append(total_time)
+            # Ограничиваем историю 10 записями
+            sync_stats_data["history_empty_durations"] = sync_stats_data["history_empty_durations"][-10:]
+            # Расчет среднего
+            sync_stats_data["average_empty_duration"] = sum(sync_stats_data["history_empty_durations"]) / len(sync_stats_data["history_empty_durations"])
+            updated = True
+    else:
+        if link_checking_time is not None:
+            sync_stats_data["last_cached_run_duration"] = link_checking_time
+            sync_stats_data["history_cached_durations"].append(link_checking_time)
+            # Ограничиваем историю 10 записями
+            sync_stats_data["history_cached_durations"] = sync_stats_data["history_cached_durations"][-10:]
+            # Расчет среднего
+            sync_stats_data["average_cached_duration"] = sum(sync_stats_data["history_cached_durations"]) / len(sync_stats_data["history_cached_durations"])
+            updated = True
+            
+    if downloaded_files_count is not None:
+        sync_stats_data["last_run_download_count"] = downloaded_files_count
+        updated = True
+            
+    if updated:
+        try:
+            os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+            with open(STATS_FILE, "w", encoding="utf-8") as f:
+                json.dump(sync_stats_data, f, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
 
 def main():
     PORT = 8080
@@ -1427,7 +1423,7 @@ def main():
     server = None
     for port in range(PORT, PORT + 20):
         try:
-            server = socketserver.TCPServer(("", port), DashboardHTTPRequestHandler)
+            server = socketserver.TCPServer(("127.0.0.1", port), DashboardHTTPRequestHandler)
             PORT = port
             break
         except OSError:

@@ -12,67 +12,13 @@ import re
 import json
 import argparse
 
+from rom_common import GREEN, YELLOW, RED, CYAN, BOLD, RESET, clean_model_and_version
+
 # --- Константы ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCAL_DOWNLOADS_ROOT = os.path.expanduser("~/Documents/FixtureROM/Downloads")
+LOCAL_DOWNLOADS_ROOT = os.path.join(SCRIPT_DIR, "Downloads")
 METADATA_FILE = os.path.join(LOCAL_DOWNLOADS_ROOT, "metadata.json")
 
-# ANSI-коды для красивого вывода
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-RED = "\033[91m"
-CYAN = "\033[96m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
-
-def clean_model_and_version(description, brand):
-    """
-    Извлекает имя модели и версию из описания.
-    """
-    desc = description.strip()
-    
-    # 0. Удаляем технические префиксы автопоиска (для Aputure/Amaran)
-    desc = re.sub(r'^автоматически\s+найденный\s+файл\s*\(', '', desc, flags=re.IGNORECASE).strip()
-    if desc.endswith(')'):
-        desc = desc[:-1].strip()
-
-    # 1. Извлекаем версию (например, V1.6, V2.01.22, 1.04)
-    # Позволяем версии начинаться на границе слова или после подчеркивания (_)
-    version = ""
-    v_match = re.search(r'(?:\b|_)(v?\d+(?:\.\d+)+)\b', desc, re.IGNORECASE)
-    if v_match:
-        version = v_match.group(1)
-        # Вырезаем версию из описания модели
-        start_idx = v_match.start(1)
-        if start_idx > 0 and desc[start_idx-1] in ['_', '-', ' ']:
-            start_idx -= 1
-        desc = desc[:start_idx] + desc[v_match.end():]
-        
-    # 2. Удаляем упоминание бренда
-    desc = re.sub(rf'\b{brand}\b', '', desc, flags=re.IGNORECASE).strip()
-    
-    # 3. Удаляем ключевые слова типов файлов на конце описания
-    desc = re.sub(r'\b(firmware|user\s+manual|manual|dmx\s+charts|dmx\s+chart|dmx\s+profile|dmx\s+specification|dmx|practical\s+table|table|specification|profile)\b.*$', '', desc, flags=re.IGNORECASE).strip()
-    
-    # 4. Очищаем висящие знаки препинания и разделители
-    desc = re.sub(r'[\s\-_\/]+$', '', desc).strip()
-    desc = re.sub(r'^[\s\-_\/]+', '', desc).strip()
-    
-    # 5. Приводим модель к верхнему регистру
-    model = desc.upper()
-    
-    # Заменяем подчеркивания на пробелы для человекочитаемости модели
-    model = model.replace('_', ' ').replace('  ', ' ').strip()
-    
-    # Стандартизируем формат версии (всегда с большой 'V')
-    if version:
-        version_upper = version.upper()
-        if not version_upper.startswith('V'):
-            version = "V" + version
-        else:
-            version = "V" + version[1:]
-            
-    return model, version
 
 def get_new_filename(raw_fn, metadata):
     """
@@ -186,41 +132,55 @@ def main():
                 
             print(f"{BOLD}📂 Раздел: {brand} | Категория: {cat}{RESET}")
             
-            # Сканируем файлы в папке бренда
-            files = [f for f in os.listdir(brand_dir) if os.path.isfile(os.path.join(brand_dir, f)) and not f.startswith('.')]
+            # Рекурсивно сканируем все файлы в папке бренда (включая подпапки моделей)
+            files_to_process = []
+            for root, dirs, filenames in os.walk(brand_dir):
+                for f in filenames:
+                    if f.startswith('.') or f == "metadata.json":
+                        continue
+                    files_to_process.append((f, os.path.join(root, f), root))
             
-            # Список новых имен для предотвращения коллизий в текущей сессии
-            allocated_names = set()
+            # Список новых имен для предотвращения коллизий в текущей сессии для каждого каталога
+            allocated_names_by_dir = {}
             
-            for fn in sorted(files):
-                source_path = os.path.join(brand_dir, fn)
-                
-                # Ищем метаданные для файла
-                meta = metadata_db.get(fn)
+            for fn, source_path, file_dir in sorted(files_to_process, key=lambda x: x[0]):
+                if file_dir not in allocated_names_by_dir:
+                    allocated_names_by_dir[file_dir] = set()
+                    
+                # Ищем метаданные для файла по его имени на диске
+                meta = None
+                for raw_fn, m in metadata_db.items():
+                    if m.get("target_filename") == fn:
+                        meta = m
+                        break
                 if not meta:
-                    # Попробуем найти по URL/описанию (на случай если имя уже частично изменено)
+                    meta = metadata_db.get(fn)
+                    
+                if not meta:
                     not_found_count += 1
                     continue
                     
-                new_fn = get_new_filename(fn, meta)
+                custom_filename = meta.get("target_filename")
+                new_fn = custom_filename if custom_filename else get_new_filename(fn, meta)
                 
-                # Защита от коллизий имен внутри папки
-                if new_fn in allocated_names:
+                # Защита от коллизий имен внутри конкретной папки
+                allocated = allocated_names_by_dir[file_dir]
+                if new_fn in allocated:
                     base, ext = os.path.splitext(new_fn)
                     counter = 1
-                    while f"{base}_{counter}{ext}" in allocated_names or os.path.exists(os.path.join(brand_dir, f"{base}_{counter}{ext}")):
+                    while f"{base}_{counter}{ext}" in allocated or os.path.exists(os.path.join(file_dir, f"{base}_{counter}{ext}")):
                         counter += 1
                     new_fn = f"{base}_{counter}{ext}"
                     collision_count += 1
                     
-                allocated_names.add(new_fn)
+                allocated.add(new_fn)
                 
                 if fn == new_fn:
                     print(f"   ⏭️  {GREEN}Уже стандартизирован:{RESET} {fn}")
                     skip_count += 1
                     continue
                     
-                dest_path = os.path.join(brand_dir, new_fn)
+                dest_path = os.path.join(file_dir, new_fn)
                 
                 if not args.commit:
                     print(f"   🔄  {YELLOW}[Превью]{RESET} {fn}\n       ↳ {GREEN}{new_fn}{RESET}")

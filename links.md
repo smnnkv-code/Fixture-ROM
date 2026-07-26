@@ -21,3 +21,52 @@
 - **P300R DMX Practical Table:** [Скачать PDF](https://www.knowled.com/Downloads/KNOWLED_P300R_DMX.pdf)
 - **UP-C150 Firmware V1.06:** [Скачать zip](https://www.godox.com/Downloads/Godox_Firmware_UP-C150_V1.06.zip)
 - **RS100R DMX Mode Specification:** [Скачать PDF](https://www.godox.com/Downloads/Godox_RS100R_DMX__Chinese_English.pdf)
+
+## Amaran
+- **amaran F21c F22c - DMX Profile Specification:** [Скачать PDF](http://web.archive.org/web/20221112031516/https://www.aputure.com/wp-content/uploads/2022/06/F21C-F22C-DMX-Profile-Specification-V1.0-.pdf)
+- **amaran F21x F22x - DMX Profile Specification:** [Скачать PDF](http://web.archive.org/web/20221112030631/https://www.aputure.com/wp-content/uploads/2022/06/F21X-F22X-Pro-DMX-Profile-Specification-V1.0-.pdf)
+- **amaran PT1c PT2c PT4c - DMX Profile Specification:** [Скачать PDF](http://web.archive.org/web/20230407005432/https://www.aputure.com/wp-content/uploads/2023/02/amaran-PT-DMX-Profile-Specification-V1.0.pdf)
+- **amaran T2c & T4c - DMX Profile Specification:** [Скачать PDF](https://gzhls.at/blob/ldb/b/c/d/5/2e28adf15f55de3d1f0666b6243aff32eba3.pdf)
+
+## ARRI
+- **Страница прошивок (Firmware):** [ARRI Lighting Firmware](https://www.arri.com/en/technical-service/firmware/firmware-updates-for-lighting-products)
+- **Страница поиска DMX (DMX Charts Search):** [ARRI Search "DMX"](https://www.arri.com/en/search?query=DMX)
+
+## Astera
+- **Общая страница загрузок:** [Astera Downloads](https://astera-led.com/downloads/)
+
+## Creamsource
+- **Главный хаб базы знаний:** [Creamsource Knowledge Base](https://knowledge.creamsource.com/)
+- **Раздел загрузок Vortex:** [Vortex Series Downloads](https://knowledge.creamsource.com/vortex)
+- **Vortex Firmware v3.1.0 (Пример .sfb):** [Скачать SFB](https://knowledge.creamsource.com/hubfs/vortex_v3.1.0.sfb?hsLang=en)
+- **SpaceX/Sky Firmware (Пример .upg):** [Скачать UPG](https://knowledge.creamsource.com/hubfs/cs_150_SKY_SPACEX_V2-6-0.upg?hsLang=en)
+
+## GVM
+- **Страница мануалов и документов:** [GVM Product Manuals](https://gvmled.com/product-manuals/)
+- **GVM-PRO-BD45R DMX (Пример):** [Скачать PDF](https://gvmled.com/wp-content/uploads/2023/11/dmx-pro.pdf)
+
+## LiteGear
+- **Центр документов (DMX-карты и мануалы):** [LiteGear Document Center](https://www.litegear.com/document-center/)
+- **Раздел прошивок Spectrum OS:** [LiteGear Spectrum OS Downloads](https://www.litegear.com/spectrum-os/downloads/)
+- **Пример DMX-профиля Spectrum OS3:** [Скачать PDF](https://www.litegear.com/wp-content/uploads/2023/11/Spectrum_OS3_RDM_DMX_Profiles.pdf)
+
+## Lightstar
+- **Страница поддержки и документов:** [Lightstar Support](https://www.lightstarusa.com/support/)
+- **Пример DMX-карты / Мануала:** [Скачать PDF](https://www.lightstarusa.com/wp-content/uploads/2020/05/LUXED-4-Manual.pdf)
+
+## Litepanels
+- **Страница прошивок (Firmware):** [Litepanels Firmware Updates](https://www.litepanels.com/en/product-support/firmware-updates/download/)
+- **Раздел DMX-карт (DMX Charts):** [Litepanels Downloads](https://www.litepanels.com/en/product-support/download/)
+
+## Quasar Science
+- **Страница прошивок и DMX:** [Quasar Science Firmware Hub](https://www.quasarscience.com/pages/firmware)
+
+## Kino Flo
+- **Общий раздел загрузок:** [Kino Flo Downloads](https://kinoflo.com/downloads/)
+- **Архив мануалов:** [Kino Flo Manuals Archive](https://kinoflo.com/manuals-archive/)
+
+## Pipe Lighting
+- **Раздел загрузок:** [Pipe Lighting Downloads](https://www.pipelighting.com/downloads)
+
+## Pheon Lux
+- **Раздел загрузок:** [Pheon Lux Download Center](https://www.pheonlux.com/download_center/)

@@ -16,5 +16,17 @@ __pycache__/
 ehthumbs.db
 Thumbs.db
 
+# Snapshots (runtime data, regenerated each run)
+Snapshots/
+
+# Local user config
+config.json
+custom_scrapers.json
+
+# Development artifacts
+code-review-report-kimi3.md
+refactor-prompt.md
+refactoring-report.md
+
 # Log files
 *.log
