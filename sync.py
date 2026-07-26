@@ -49,10 +49,10 @@ BLACKLIST = set()
 RULES = {}
 
 
-def _scrape_get(url, headers=None, timeout=20):
+def _scrape_get(url, params=None, headers=None, timeout=20):
     """GET-запрос с вежливой паузой (SCRAPE_DELAY) для скраперов."""
     time.sleep(SCRAPE_DELAY)
-    return requests.get(url, headers=headers, timeout=timeout)
+    return requests.get(url, params=params, headers=headers, timeout=timeout)
 
 def cleanup_empty_directories(path, preserve_path=None):
     """
