@@ -24,6 +24,7 @@ config.json
 custom_scrapers.json
 
 # Development artifacts
+code-review-prompt.md
 code-review-report-kimi3.md
 refactor-prompt.md
 refactoring-report.md

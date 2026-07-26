@@ -42,9 +42,17 @@ SNAPSHOTS_DIR = os.path.join(SCRIPT_DIR, "Snapshots")
 BLACKLIST_FILE = os.path.join(SNAPSHOTS_DIR, "blacklist.json")
 RULES_FILE = os.path.join(SNAPSHOTS_DIR, "rules.json")
 
+SCRAPE_DELAY = 1.5  # вежливая пауза (сек) между HTTP-запросами скраперов
+
 # Глобальные наборы черного списка и правил
 BLACKLIST = set()
 RULES = {}
+
+
+def _scrape_get(url, headers=None, timeout=20):
+    """GET-запрос с вежливой паузой (SCRAPE_DELAY) для скраперов."""
+    time.sleep(SCRAPE_DELAY)
+    return requests.get(url, headers=headers, timeout=timeout)
 
 def cleanup_empty_directories(path, preserve_path=None):
     """
@@ -53,10 +61,10 @@ def cleanup_empty_directories(path, preserve_path=None):
     """
     if not os.path.isdir(path):
         return
-        
+
     try:
         entries = os.listdir(path)
-    except Exception:
+    except OSError:
         return
         
     for entry in entries:
@@ -70,16 +78,18 @@ def cleanup_empty_directories(path, preserve_path=None):
     if path != preserve_path:
         try:
             current_entries = os.listdir(path)
-            visible_contents = [e for e in current_entries if not e.startswith('.')]
-            if not visible_contents:
+            # Удаляем только известный мусор, остальные dotfiles не трогаем
+            known_trash = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
+            remaining = [e for e in current_entries if e not in known_trash]
+            if not remaining:
                 for e in current_entries:
                     try:
                         os.remove(os.path.join(path, e))
-                    except Exception:
+                    except OSError:
                         pass
                 os.rmdir(path)
                 print(f"   🧹 Удалена пустая папка: {os.path.relpath(path, LOCAL_DOWNLOADS_ROOT)}")
-        except Exception:
+        except OSError:
             pass
 
 def load_blacklist():
@@ -90,7 +100,7 @@ def load_blacklist():
                 data = json.load(f)
                 if isinstance(data, list):
                     return set(data)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
     return set()
 
@@ -102,7 +112,7 @@ def load_rules():
                 data = json.load(f)
                 if isinstance(data, dict):
                     return data
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
     return {}
 
@@ -140,7 +150,7 @@ def load_config():
                     if sub_k not in user_config[k]:
                         user_config[k][sub_k] = sub_v
         return user_config
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return default_config
 
 
@@ -341,7 +351,7 @@ def scrape_aputure_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        response = requests.get(url, headers=headers, timeout=25)
+        response = _scrape_get(url, headers=headers, timeout=25)
         response.raise_for_status()
         
         url_pattern = re.compile(
@@ -367,7 +377,7 @@ def scrape_aputure_links():
                     "brand": brand,
                     "category": category
                 })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании Aputure: {e}{RESET}")
     return scraped
 
@@ -383,7 +393,7 @@ def scrape_nanlink_api(brand_path, brand_name):
     }
     scraped = []
     try:
-        response = requests.get(index_url, headers=headers, timeout=20)
+        response = _scrape_get(index_url, headers=headers, timeout=20)
         response.raise_for_status()
         index_data = response.json()
         
@@ -403,7 +413,7 @@ def scrape_nanlink_api(brand_path, brand_name):
             sys.stdout.flush()
             
             try:
-                detail_resp = requests.get(
+                detail_resp = _scrape_get(
                     detail_url, 
                     params={"productId": str(p_id), "accessoryId": ""}, 
                     headers=headers, 
@@ -439,12 +449,12 @@ def scrape_nanlink_api(brand_path, brand_name):
                                     "brand": brand_name,
                                     "category": category
                                 })
-            except Exception:
+            except (requests.RequestException, json.JSONDecodeError):
                 pass
-                
+
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
-    except Exception as e:
+    except (requests.RequestException, json.JSONDecodeError, OSError) as e:
         print(f"    {RED}⚠️ Ошибка при сканировании API {brand_name}: {e}{RESET}")
     return scraped
 
@@ -469,7 +479,7 @@ def scrape_godox_style_pages(base_url, pages, brand_name):
     for page_path in pages:
         url = urllib.parse.urljoin(base_url, page_path)
         try:
-            response = requests.get(url, headers=headers, timeout=20)
+            response = _scrape_get(url, headers=headers, timeout=20)
             response.raise_for_status()
             
             page_results = []
@@ -510,9 +520,9 @@ def scrape_godox_style_pages(base_url, pages, brand_name):
                         "brand": brand_name,
                         "category": category
                     })
-        except Exception as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"    {RED}⚠️ Ошибка при сканировании страницы {url}: {e}{RESET}")
-    return scraped
+        return scraped
 
 def resolve_canto_link(short_name):
     """
@@ -520,10 +530,10 @@ def resolve_canto_link(short_name):
     """
     headers = {"User-Agent": USER_AGENT}
     try:
-        r = requests.get(f"https://arri.canto.de/rest/share/protected/{short_name}", headers=headers, timeout=15)
+        r = _scrape_get(f"https://arri.canto.de/rest/share/protected/{short_name}", headers=headers, timeout=15)
         if r.status_code == 200 and r.text.startswith("/v/"):
             return r.text[3:]
-    except Exception:
+    except requests.RequestException:
         pass
     return None
 
@@ -535,7 +545,7 @@ def extract_canto_assets(presentation_id):
     assets = []
     lib_url = f"https://arri.canto.de/rest/v/{presentation_id}/library"
     try:
-        r = requests.get(lib_url, headers=headers, timeout=15)
+        r = _scrape_get(lib_url, headers=headers, timeout=15)
         if r.status_code != 200:
             return assets
         lib_data = r.json()
@@ -555,20 +565,20 @@ def extract_canto_assets(presentation_id):
             if scheme == "folder":
                 folder_url = f"https://arri.canto.de/rest/v/{presentation_id}/search/folder/{path}"
                 try:
-                    fr = requests.get(folder_url, headers=headers, timeout=15)
+                    fr = _scrape_get(folder_url, headers=headers, timeout=15)
                     if fr.status_code == 200:
                         fdata = fr.json()
                         queue.extend(fdata.get("hits", {}).get("hit", []))
-                except Exception:
+                except (requests.RequestException, json.JSONDecodeError):
                     pass
             elif scheme == "album":
                 album_url = f"https://arri.canto.de/rest/v/{presentation_id}/search/album/{path}"
                 try:
-                    ar = requests.get(album_url, headers=headers, timeout=15)
+                    ar = _scrape_get(album_url, headers=headers, timeout=15)
                     if ar.status_code == 200:
                         adata = ar.json()
                         queue.extend(adata.get("hits", {}).get("hit", []))
-                except Exception:
+                except (requests.RequestException, json.JSONDecodeError):
                     pass
             elif scheme in ["document", "other", "image", "video", "audio"]:
                 display_name = item.get("displayName") or f"{path}.bin"
@@ -579,7 +589,7 @@ def extract_canto_assets(presentation_id):
                     "filename": display_name,
                     "description": display_name
                 })
-    except Exception:
+    except (requests.RequestException, json.JSONDecodeError):
         pass
     return assets
 
@@ -607,7 +617,7 @@ def scrape_arri_links():
     # 1. Сканирование страниц прошивок
     for page in fw_subpages:
         try:
-            r = requests.get(page, headers=headers, timeout=20)
+            r = _scrape_get(page, headers=headers, timeout=20)
             if r.status_code == 200:
                 blobs = arri_blob_pattern.findall(r.text)
                 for b in blobs:
@@ -616,14 +626,14 @@ def scrape_arri_links():
                 cantos = canto_pattern.findall(r.text)
                 for c in cantos:
                     canto_keys.add(c)
-        except Exception:
+        except requests.RequestException:
             pass
-            
+
     # 2. Сканирование результатов поиска DMX
     for page_num in range(3):
         search_url = f"https://www.arri.com/service/search/en/49664?pageNum={page_num}&query=DMX"
         try:
-            r = requests.get(search_url, headers=headers, timeout=20)
+            r = _scrape_get(search_url, headers=headers, timeout=20)
             if r.status_code == 200:
                 blobs = arri_blob_pattern.findall(r.text)
                 for b in blobs:
@@ -632,9 +642,9 @@ def scrape_arri_links():
                 cantos = canto_pattern.findall(r.text)
                 for c in cantos:
                     canto_keys.add(c)
-        except Exception:
+        except requests.RequestException:
             pass
-            
+
     # 3. Обход найденных Canto-порталов
     for short_name in canto_keys:
         pres_id = resolve_canto_link(short_name)
@@ -695,7 +705,7 @@ def scrape_astera_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        response = requests.get(url, headers=headers, timeout=25)
+        response = _scrape_get(url, headers=headers, timeout=25)
         response.raise_for_status()
         
         parser = AsteraHTMLParser()
@@ -742,7 +752,7 @@ def scrape_astera_links():
                     "brand": "Astera",
                     "category": "01_Firmware"
                 })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании Astera: {e}{RESET}")
     return scraped
 
@@ -796,12 +806,12 @@ def scrape_creamsource_links():
             pages_crawled += 1
             
             try:
-                response = requests.get(curr_url, headers=headers, timeout=10)
+                response = _scrape_get(curr_url, headers=headers, timeout=10)
                 if response.status_code != 200:
                     continue
-            except Exception:
+            except requests.RequestException:
                 continue
-                
+
             parser = LinkParser()
             parser.feed(response.text)
             
@@ -862,9 +872,9 @@ def scrape_creamsource_links():
                 "category": category
             })
             
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании Creamsource: {e}{RESET}")
-        
+
     return scraped
 
 def scrape_gvm_links():
@@ -875,7 +885,7 @@ def scrape_gvm_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        response = requests.get(url, headers=headers, timeout=25)
+        response = _scrape_get(url, headers=headers, timeout=25)
         response.raise_for_status()
         
         parser = LinkParser()
@@ -921,7 +931,7 @@ def scrape_gvm_links():
                         "brand": "GVM",
                         "category": "02_DMX_Charts"
                     })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании GVM: {e}{RESET}")
     return scraped
 
@@ -935,7 +945,7 @@ def scrape_litegear_links():
     # 1. Сканируем Spectrum OS downloads
     url_os = "https://www.litegear.com/spectrum-os/downloads/"
     try:
-        response = requests.get(url_os, headers=headers, timeout=20)
+        response = _scrape_get(url_os, headers=headers, timeout=20)
         if response.status_code == 200:
             parser = LinkParser()
             parser.feed(response.text)
@@ -995,13 +1005,13 @@ def scrape_litegear_links():
                         "brand": "LiteGear",
                         "category": "02_DMX_Charts"
                     })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании Spectrum OS LiteGear: {e}{RESET}")
 
     # 2. Сканируем Document Center (WPFD ссылки)
     url_doc = "https://www.litegear.com/document-center/"
     try:
-        response = requests.get(url_doc, headers=headers, timeout=20)
+        response = _scrape_get(url_doc, headers=headers, timeout=20)
         if response.status_code == 200:
             parser = LinkParser()
             parser.feed(response.text)
@@ -1045,9 +1055,9 @@ def scrape_litegear_links():
                         "brand": "LiteGear",
                         "category": "02_DMX_Charts"
                     })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании Document Center LiteGear: {e}{RESET}")
-        
+
     return scraped
 
 def scrape_lightstar_links():
@@ -1058,7 +1068,7 @@ def scrape_lightstar_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        response = requests.get(url, headers=headers, timeout=25)
+        response = _scrape_get(url, headers=headers, timeout=25)
         if response.status_code == 200:
             parser = LinkParser()
             parser.feed(response.text)
@@ -1110,7 +1120,7 @@ def scrape_lightstar_links():
                         "brand": "Lightstar",
                         "category": "02_DMX_Charts"
                     })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка при сканировании Lightstar: {e}{RESET}")
     return scraped
 
@@ -1133,7 +1143,7 @@ def scrape_litepanels_links():
     
     # 1. Скрапинг прошивок
     try:
-        r = requests.get(fw_url, headers=headers, timeout=20)
+        r = _scrape_get(fw_url, headers=headers, timeout=20)
         if r.status_code == 403:
             print(f"    {YELLOW}Litepanels (FW): Доступ временно ограничен защитой Cloudflare (403). Ссылка будет получена из резервных.{RESET}")
         elif r.status_code == 200:
@@ -1154,12 +1164,12 @@ def scrape_litepanels_links():
                             "brand": "Litepanels",
                             "category": "01_Firmware"
                         })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка скрапинга Litepanels FW: {e}{RESET}")
 
     # 2. Скрапинг DMX-карт
     try:
-        r = requests.get(dmx_url, headers=headers, timeout=20)
+        r = _scrape_get(dmx_url, headers=headers, timeout=20)
         if r.status_code == 403:
             print(f"    {YELLOW}Litepanels (DMX): Доступ временно ограничен защитой Cloudflare (403). Ссылка будет получена из резервных.{RESET}")
         elif r.status_code == 200:
@@ -1180,9 +1190,9 @@ def scrape_litepanels_links():
                             "brand": "Litepanels",
                             "category": "02_DMX_Charts"
                         })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка скрапинга Litepanels DMX: {e}{RESET}")
-        
+
     return scraped
 
 def scrape_quasar_links():
@@ -1193,7 +1203,7 @@ def scrape_quasar_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        r = requests.get(url, headers=headers, timeout=20)
+        r = _scrape_get(url, headers=headers, timeout=20)
         if r.status_code == 200:
             parser = LinkParser()
             parser.feed(r.text)
@@ -1225,7 +1235,7 @@ def scrape_quasar_links():
                             "brand": "Quasar Science",
                             "category": "02_DMX_Charts"
                         })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка скрапинга Quasar Science: {e}{RESET}")
     return scraped
 
@@ -1243,7 +1253,7 @@ def scrape_kinoflo_links():
     seen_urls = set()
     for url in urls:
         try:
-            r = requests.get(url, headers=headers, timeout=20)
+            r = _scrape_get(url, headers=headers, timeout=20)
             if r.status_code == 200:
                 parser = LinkParser()
                 parser.feed(r.text)
@@ -1280,7 +1290,7 @@ def scrape_kinoflo_links():
                                 "brand": "Kino Flo",
                                 "category": "02_DMX_Charts"
                             })
-        except Exception as e:
+        except requests.RequestException as e:
             print(f"    {RED}⚠️ Ошибка скрапинга Kino Flo ({url}): {e}{RESET}")
     return scraped
 
@@ -1292,7 +1302,7 @@ def scrape_pipelighting_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        r = requests.get(url, headers=headers, timeout=20)
+        r = _scrape_get(url, headers=headers, timeout=20)
         if r.status_code == 200:
             parser = LinkParser()
             parser.feed(r.text)
@@ -1329,7 +1339,7 @@ def scrape_pipelighting_links():
                         "brand": "Pipe Lighting",
                         "category": "02_DMX_Charts"
                     })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка скрапинга Pipe Lighting: {e}{RESET}")
     return scraped
 
@@ -1341,7 +1351,7 @@ def scrape_pheonlux_links():
     headers = {"User-Agent": USER_AGENT}
     scraped = []
     try:
-        r = requests.get(url, headers=headers, timeout=20)
+        r = _scrape_get(url, headers=headers, timeout=20)
         if r.status_code == 200:
             parser = LinkParser()
             parser.feed(r.text)
@@ -1360,7 +1370,7 @@ def scrape_pheonlux_links():
                             "brand": "Pheon Lux",
                             "category": "02_DMX_Charts"
                         })
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"    {RED}⚠️ Ошибка скрапинга Pheon Lux: {e}{RESET}")
     return scraped
 
@@ -1550,7 +1560,7 @@ def notify_user_macos(new_files):
         script = f'display notification "{message}" with title "{title}" subtitle "{subtitle}"'
         try:
             subprocess.run(["osascript", "-e", script])
-        except Exception:
+        except OSError:
             pass
         return
     title = "FIXTURE_ROM"
@@ -1580,7 +1590,7 @@ def notify_user_macos(new_files):
     '''
     try:
         subprocess.run(["osascript", "-e", apple_script])
-    except Exception as e:
+    except OSError as e:
         print(f"Ошибка вызова уведомления: {e}")
 
 
@@ -1622,7 +1632,7 @@ def main():
             with open(db_path, "r", encoding="utf-8") as f:
                 raw_db = json.load(f)
                 existing_db = {normalize_key(k): v for k, v in raw_db.items()}
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
     
     # 2. Загрузка конфигурации и сканирование сайтов
@@ -1631,196 +1641,82 @@ def main():
     
     enabled_brands = config.get("enabled_brands", {})
     
-    # Aputure & Amaran
-    aputure_items = []
-    run_aputure = enabled_brands.get("Aputure", True) or enabled_brands.get("Amaran", True)
-    if run_aputure:
-        sys.stdout.write("    - Сканирование Aputure / Amaran...")
-        sys.stdout.flush()
-        aputure_items = scrape_aputure_links()
-        print(f"\r    - Aputure / Amaran: найдено {GREEN}{len(aputure_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Aputure / Amaran: пропущено (отключено в настройках).")
-        
-    # Nanlite
-    nanlite_items = []
-    if enabled_brands.get("Nanlite", True):
-        sys.stdout.write("    - Сканирование Nanlite...")
-        sys.stdout.flush()
-        nanlite_items = scrape_nanlink_api("nanlite", "Nanlite")
-        print(f"\r    - Nanlite: найдено {GREEN}{len(nanlite_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Nanlite: пропущено (отключено в настройках).")
-        
-    # Nanlux
-    nanlux_items = []
-    if enabled_brands.get("Nanlux", True):
-        sys.stdout.write("    - Сканирование Nanlux...")
-        sys.stdout.flush()
-        nanlux_items = scrape_nanlink_api("nanlux", "Nanlux")
-        print(f"\r    - Nanlux: найдено {GREEN}{len(nanlux_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Nanlux: пропущено (отключено в настройках).")
-        
-    # Godox
-    godox_items = []
-    if enabled_brands.get("Godox", True):
-        sys.stdout.write("    - Сканирование Godox...")
-        sys.stdout.flush()
-        godox_pages = [
-            "/firmware-continuous-light/",
-            "/firmware-continuous-light_2/",
-            "/firmware-continuous-light_3/",
-            "/firmware-control-system/",
-            "/firmware-launcher-installers/",
-            "/user-guides-continuous-light/",
-            "/user-guides-continuous-light_2/",
-            "/user-guides-continuous-light_3/",
-            "/user-guides-control-system/"
-        ]
-        godox_items = scrape_godox_style_pages("https://www.godox.com", godox_pages, "Godox")
-        print(f"\r    - Godox: найдено {GREEN}{len(godox_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Godox: пропущено (отключено в настройках).")
-        
-    # Knowled
-    knowled_items = []
-    if enabled_brands.get("Knowled", True):
-        sys.stdout.write("    - Сканирование Knowled...")
-        sys.stdout.flush()
-        knowled_pages = [
-            "/firmware-knowled/",
-            "/firmware-knowled_2/",
-            "/firmware-knowled_3/",
-            "/firmware-knowled_4/",
-            "/firmware-knowled_5/",
-            "/user-guides-knowled/",
-            "/user-guides-knowled_2/",
-            "/user-guides-knowled_3/",
-            "/user-guides-knowled_4/",
-            "/user-guides-knowled_5/"
-        ]
-        knowled_items = scrape_godox_style_pages("https://www.knowled.com", knowled_pages, "Knowled")
-        print(f"\r    - Knowled: найдено {GREEN}{len(knowled_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Knowled: пропущено (отключено в настройках).")
-        
-    # ARRI
-    arri_items = []
-    if enabled_brands.get("ARRI", True):
-        sys.stdout.write("    - Сканирование ARRI...")
-        sys.stdout.flush()
-        arri_items = scrape_arri_links()
-        print(f"\r    - ARRI: найдено {GREEN}{len(arri_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование ARRI: пропущено (отключено в настройках).")
-        
-    # Astera
-    astera_items = []
-    if enabled_brands.get("Astera", True):
-        sys.stdout.write("    - Сканирование Astera...")
-        sys.stdout.flush()
-        astera_items = scrape_astera_links()
-        print(f"\r    - Astera: найдено {GREEN}{len(astera_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Astera: пропущено (отключено в настройках).")
-        
-    # Creamsource
-    creamsource_items = []
-    if enabled_brands.get("Creamsource", True):
-        sys.stdout.write("    - Сканирование Creamsource...")
-        sys.stdout.flush()
-        creamsource_items = scrape_creamsource_links()
-        print(f"\r    - Creamsource: найдено {GREEN}{len(creamsource_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Creamsource: пропущено (отключено в настройках).")
-        
-    # GVM
-    gvm_items = []
-    if enabled_brands.get("GVM", True):
-        sys.stdout.write("    - Сканирование GVM...")
-        sys.stdout.flush()
-        gvm_items = scrape_gvm_links()
-        print(f"\r    - GVM: найдено {GREEN}{len(gvm_items)}{RESET} DMX-карт.")
-    else:
-        print("    - Сканирование GVM: пропущено (отключено в настройках).")
-        
-    # LiteGear
-    litegear_items = []
-    if enabled_brands.get("LiteGear", True):
-        sys.stdout.write("    - Сканирование LiteGear...")
-        sys.stdout.flush()
-        litegear_items = scrape_litegear_links()
-        print(f"\r    - LiteGear: найдено {GREEN}{len(litegear_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование LiteGear: пропущено (отключено в настройках).")
-        
-    # Lightstar
-    lightstar_items = []
-    if enabled_brands.get("Lightstar", True):
-        sys.stdout.write("    - Сканирование Lightstar...")
-        sys.stdout.flush()
-        lightstar_items = scrape_lightstar_links()
-        print(f"\r    - Lightstar: найдено {GREEN}{len(lightstar_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Lightstar: пропущено (отключено в настройках).")
-        
-    # Litepanels
-    litepanels_items = []
-    if enabled_brands.get("Litepanels", True):
-        sys.stdout.write("    - Сканирование Litepanels...")
-        sys.stdout.flush()
-        litepanels_items = scrape_litepanels_links()
-        print(f"\r    - Litepanels: найдено {GREEN}{len(litepanels_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Litepanels: пропущено (отключено в настройках).")
+    BRAND_REGISTRY = [
+        {"key": "Aputure", "label": "Aputure / Amaran",
+         "scrape_fn": lambda: scrape_aputure_links(),
+         "enabled_key": lambda eb: eb.get("Aputure", True) or eb.get("Amaran", True)},
+        {"key": "Nanlite", "label": "Nanlite",
+         "scrape_fn": lambda: scrape_nanlink_api("nanlite", "Nanlite")},
+        {"key": "Nanlux", "label": "Nanlux",
+         "scrape_fn": lambda: scrape_nanlink_api("nanlux", "Nanlux")},
+        {"key": "Godox", "label": "Godox",
+         "scrape_fn": lambda: scrape_godox_style_pages("https://www.godox.com", [
+             "/firmware-continuous-light/",
+             "/firmware-continuous-light_2/",
+             "/firmware-continuous-light_3/",
+             "/firmware-control-system/",
+             "/firmware-launcher-installers/",
+             "/user-guides-continuous-light/",
+             "/user-guides-continuous-light_2/",
+             "/user-guides-continuous-light_3/",
+             "/user-guides-control-system/",
+         ], "Godox")},
+        {"key": "Knowled", "label": "Knowled",
+         "scrape_fn": lambda: scrape_godox_style_pages("https://www.knowled.com", [
+             "/firmware-knowled/",
+             "/firmware-knowled_2/",
+             "/firmware-knowled_3/",
+             "/firmware-knowled_4/",
+             "/firmware-knowled_5/",
+             "/user-guides-knowled/",
+             "/user-guides-knowled_2/",
+             "/user-guides-knowled_3/",
+             "/user-guides-knowled_4/",
+             "/user-guides-knowled_5/",
+         ], "Knowled")},
+        {"key": "ARRI", "label": "ARRI",
+         "scrape_fn": lambda: scrape_arri_links()},
+        {"key": "Astera", "label": "Astera",
+         "scrape_fn": lambda: scrape_astera_links()},
+        {"key": "Creamsource", "label": "Creamsource",
+         "scrape_fn": lambda: scrape_creamsource_links()},
+        {"key": "GVM", "label": "GVM",
+         "scrape_fn": lambda: scrape_gvm_links(),
+         "label_suffix": "DMX-карт"},
+        {"key": "LiteGear", "label": "LiteGear",
+         "scrape_fn": lambda: scrape_litegear_links()},
+        {"key": "Lightstar", "label": "Lightstar",
+         "scrape_fn": lambda: scrape_lightstar_links()},
+        {"key": "Litepanels", "label": "Litepanels",
+         "scrape_fn": lambda: scrape_litepanels_links()},
+        {"key": "Quasar Science", "label": "Quasar Science",
+         "scrape_fn": lambda: scrape_quasar_links()},
+        {"key": "Kino Flo", "label": "Kino Flo",
+         "scrape_fn": lambda: scrape_kinoflo_links()},
+        {"key": "Pipe Lighting", "label": "Pipe Lighting",
+         "scrape_fn": lambda: scrape_pipelighting_links()},
+        {"key": "Pheon Lux", "label": "Pheon Lux",
+         "scrape_fn": lambda: scrape_pheonlux_links()},
+    ]
 
-    # Quasar Science
-    quasar_items = []
-    if enabled_brands.get("Quasar Science", True):
-        sys.stdout.write("    - Сканирование Quasar Science...")
-        sys.stdout.flush()
-        quasar_items = scrape_quasar_links()
-        print(f"\r    - Quasar Science: найдено {GREEN}{len(quasar_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Quasar Science: пропущено (отключено в настройках).")
+    scraped_lists = {}
+    for brand in BRAND_REGISTRY:
+        enabled = brand.get("enabled_key", lambda eb: eb.get(brand["key"], True))(enabled_brands)
+        items = []
+        if enabled:
+            sys.stdout.write(f'    - Сканирование {brand["label"]}...')
+            sys.stdout.flush()
+            items = brand["scrape_fn"]()
+            label_suffix = brand.get("label_suffix", "файлов")
+            print(f'\r    - {brand["label"]}: найдено {GREEN}{len(items)}{RESET} {label_suffix}.')
+        else:
+            print(f'    - Сканирование {brand["label"]}: пропущено (отключено в настройках).')
+        scraped_lists[brand["key"]] = items
 
-    # Kino Flo
-    kinoflo_items = []
-    if enabled_brands.get("Kino Flo", True):
-        sys.stdout.write("    - Сканирование Kino Flo...")
-        sys.stdout.flush()
-        kinoflo_items = scrape_kinoflo_links()
-        print(f"\r    - Kino Flo: найдено {GREEN}{len(kinoflo_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Kino Flo: пропущено (отключено в настройках).")
-
-    # Pipe Lighting
-    pipelighting_items = []
-    if enabled_brands.get("Pipe Lighting", True):
-        sys.stdout.write("    - Сканирование Pipe Lighting...")
-        sys.stdout.flush()
-        pipelighting_items = scrape_pipelighting_links()
-        print(f"\r    - Pipe Lighting: найдено {GREEN}{len(pipelighting_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Pipe Lighting: пропущено (отключено в настройках).")
-
-    # Pheon Lux
-    pheonlux_items = []
-    if enabled_brands.get("Pheon Lux", True):
-        sys.stdout.write("    - Сканирование Pheon Lux...")
-        sys.stdout.flush()
-        pheonlux_items = scrape_pheonlux_links()
-        print(f"\r    - Pheon Lux: найдено {GREEN}{len(pheonlux_items)}{RESET} файлов.")
-    else:
-        print("    - Сканирование Pheon Lux: пропущено (отключено в настройках).")
-        
     # Слияние всех списков с исключением дубликатов по URL и фильтрацией пустых категорий
-    all_scraped = (aputure_items + nanlite_items + nanlux_items + 
-                   godox_items + knowled_items + arri_items + astera_items + 
-                   creamsource_items + gvm_items + litegear_items + lightstar_items + 
-                   litepanels_items + quasar_items + kinoflo_items + pipelighting_items + 
-                   pheonlux_items)
+    all_scraped = []
+    for brand in BRAND_REGISTRY:
+        all_scraped.extend(scraped_lists[brand["key"]])
     
     seen_urls = {}
     for item in manual_items:
@@ -1904,11 +1800,15 @@ def main():
         if meta.get("url") == "":
             db[raw_fn] = meta
     db_path = os.path.join(LOCAL_DOWNLOADS_ROOT, "metadata.json")
+    tmp_path = db_path + ".tmp"
     try:
-        with open(db_path, "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(db, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, db_path)
         print(f"📦 База метаданных для переименования записана в {BLUE}metadata.json{RESET} ({len(db)} записей).")
-    except Exception as e:
+    except (OSError, IOError) as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
         print(f"⚠️ Предупреждение: Не удалось записать metadata.json: {e}")
     
     # 3. Проверка подключения флешки
@@ -2037,14 +1937,14 @@ def main():
             os.makedirs(local_dir, exist_ok=True)
             try:
                 shutil.move(legacy_local_path, local_path)
-            except Exception:
+            except OSError:
                 pass
-                
+
         if usb_mounted and os.path.exists(legacy_usb_path) and not os.path.exists(usb_path):
             os.makedirs(usb_dir, exist_ok=True)
             try:
                 shutil.move(legacy_usb_path, usb_path)
-            except Exception:
+            except OSError:
                 pass
         
         print(f"{BOLD}[{idx}/{len(final_items)}] {brand} | {desc}{RESET}")
@@ -2065,7 +1965,7 @@ def main():
                     print(f"   🗑️ Файл пропущен: {RED}найден в черном списке по хэшу SHA-256{RESET}")
                     try:
                         os.remove(local_path)
-                    except Exception:
+                    except OSError:
                         pass
                     skip_count += 1
                     print()

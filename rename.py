@@ -108,9 +108,15 @@ def main():
     
     if not args.commit:
         print(f"{YELLOW}ℹ️  РЕЖИМ ПРЕВЬЮ (DRY RUN). Ни один файл не будет изменен.{RESET}")
-        print(f"   Для применения изменений запустите: {BOLD}python3 rename.py --commit{RESET}\n")
+        print(f"   Для применения изменений запустите: {BOLD}python3 rename.py --commit{RESET}")
+        print(f"   {YELLOW}⚠️  ВНИМАНИЕ: Поведение именования изменилось — теперь используется")
+        print(f"   clean_model_and_version из rom_common.py (V-нормализация, маппинги брендов).{RESET}")
+        print(f"   {YELLOW}   Новые имена могут отличаться от старых. Рекомендуется сначала проверить{RESET}")
+        print(f"   {YELLOW}   превью-список выше перед запуском --commit.{RESET}\n")
     else:
-        print(f"{RED}⚠️  ВНИМАНИЕ: Запущен режим применения изменений (COMMIT).{RESET}\n")
+        print(f"{RED}⚠️  ВНИМАНИЕ: Запущен режим применения изменений (COMMIT).{RESET}")
+        print(f"{YELLOW}   Поведение именования изменилось — повторный прогон по существующей")
+        print(f"   коллекции может создать дубли. Убедитесь, что превью проверено.{RESET}\n")
         
     rename_count = 0
     skip_count = 0

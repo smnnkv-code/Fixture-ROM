@@ -29,7 +29,7 @@ def get_usb_root():
             import ctypes
             kernel32 = ctypes.windll.kernel32
             volumeNameBuffer = ctypes.create_unicode_buffer(1024)
-            for letter in "EFGHIJKLMNOPQRSTUVWXYZD":
+            for letter in "EFGHIJKLMNOPQRSTUVWXYZD":  # D в конце — системный диск ищем последним
                 drive = f"{letter}:\\"
                 if os.path.exists(drive):
                     res = kernel32.GetVolumeInformationW(

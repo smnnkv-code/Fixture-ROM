@@ -46,7 +46,7 @@ def load_sync_stats():
                 data = json.load(f)
                 if isinstance(data, dict):
                     sync_stats_data.update(data)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
 
 # Сразу загружаем при старте
@@ -77,9 +77,9 @@ def get_all_models_from_db():
     try:
         with open(db_path, "r", encoding="utf-8") as f:
             db = json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return {}
-        
+
     models_by_brand = {}
     for raw_fn, info in db.items():
         brand = info.get("brand")
@@ -1120,9 +1120,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                                 fw_count += 1
                             elif "02_DMX_Charts" in root:
                                 dmx_count += 1
-                        except Exception:
+                        except OSError:
                             pass
-                            
+
             cache_size_mb = total_size_bytes // (1024 * 1024)
             
             status_data = {
@@ -1141,10 +1141,16 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             
         elif parsed_url.path == '/api/logs':
             query = parse_qs(parsed_url.query)
-            offset = int(query.get('offset', [0])[0])
-            
+            try:
+                offset = int(query.get('offset', [0])[0])
+            except ValueError:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write("Invalid 'offset' parameter — must be an integer".encode())
+                return
+
             requested_lines = sync_logs[offset:]
-            
+
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -1212,9 +1218,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                         config_data = json.load(f)
-                except Exception:
+                except (OSError, json.JSONDecodeError):
                     pass
-            
+
             # Получаем все уникальные модели устройств
             available_models = get_all_models_from_db()
             
@@ -1258,12 +1264,12 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     os.startfile(LOCAL_DOWNLOADS_ROOT)
                 else:
                     subprocess.run(["open", LOCAL_DOWNLOADS_ROOT])
-            except Exception:
+            except OSError:
                 pass
             self.send_response(200)
             self.end_headers()
 
-            
+
         elif parsed_url.path == '/api/config/save':
             # Валидация входных данных
             content_length_str = self.headers.get('Content-Length', '0')
@@ -1309,9 +1315,13 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
 
             try:
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                config_tmp = CONFIG_FILE + ".tmp"
+                with open(config_tmp, "w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=4, ensure_ascii=False)
+                os.replace(config_tmp, CONFIG_FILE)
             except (OSError, IOError) as e:
+                if os.path.exists(config_tmp):
+                    os.remove(config_tmp)
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(f"Failed to write config: {e}".encode('utf-8'))
@@ -1410,12 +1420,12 @@ def run_sync_process():
             os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
             with open(STATS_FILE, "w", encoding="utf-8") as f:
                 json.dump(sync_stats_data, f, indent=4, ensure_ascii=False)
-        except Exception:
+        except OSError:
             pass
 
 def main():
     PORT = 8080
-    socketserver.TCPServer.allow_reuse_address = True
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     
     print(f"\n⚡ FIXTURE_ROM Dashboard Server ⚡")
     print(f"==================================================")
@@ -1423,7 +1433,7 @@ def main():
     server = None
     for port in range(PORT, PORT + 20):
         try:
-            server = socketserver.TCPServer(("127.0.0.1", port), DashboardHTTPRequestHandler)
+            server = socketserver.ThreadingTCPServer(("127.0.0.1", port), DashboardHTTPRequestHandler)
             PORT = port
             break
         except OSError:

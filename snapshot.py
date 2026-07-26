@@ -7,6 +7,28 @@ import datetime
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.join(BASE_DIR, "Downloads")
 SNAPSHOTS_DIR = os.path.join(BASE_DIR, "Snapshots")
+HASH_CACHE_FILE = os.path.join(SNAPSHOTS_DIR, "hash_cache.json")
+
+
+def _load_hash_cache():
+    """Загружает кэш хэшей {rel_path: {size, mtime, sha256}}."""
+    if os.path.exists(HASH_CACHE_FILE):
+        try:
+            with open(HASH_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
+def _save_hash_cache(cache):
+    """Сохраняет кэш хэшей."""
+    try:
+        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+        with open(HASH_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
 
 def get_sha256(filepath):
     """Вычисляет контрольную сумму SHA-256 для файла."""
@@ -21,11 +43,16 @@ def get_sha256(filepath):
         return None
 
 def scan_downloads():
-    """Сканирует папку Downloads и собирает информацию о файлах."""
+    """Сканирует папку Downloads и собирает информацию о файлах.
+    Использует кэш хэшей по (size, mtime) — пересчитывает только изменённые файлы.
+    """
     files_data = {}
     if not os.path.exists(DOWNLOADS_DIR):
         print(f"Папка {DOWNLOADS_DIR} не найдена.")
         return files_data
+
+    hash_cache = _load_hash_cache()
+    updated_cache = {}
 
     for root, _, files in os.walk(DOWNLOADS_DIR):
         for file in files:
@@ -33,14 +60,21 @@ def scan_downloads():
                 continue
             full_path = os.path.join(root, file)
             rel_path = os.path.relpath(full_path, DOWNLOADS_DIR)
-            
-            # Собираем данные
+
             size = os.path.getsize(full_path)
-            sha = get_sha256(full_path)
-            if sha is None:
-                continue
             mtime = os.path.getmtime(full_path)
-            
+
+            # Проверяем кэш: если файл не менялся — используем сохранённый хэш
+            cached = hash_cache.get(rel_path)
+            if cached and cached.get("size") == size and cached.get("mtime") == mtime:
+                sha = cached["sha256"]
+            else:
+                sha = get_sha256(full_path)
+                if sha is None:
+                    continue
+
+            updated_cache[rel_path] = {"size": size, "mtime": mtime, "sha256": sha}
+
             files_data[rel_path] = {
                 "rel_path": rel_path,
                 "filename": file,
@@ -48,6 +82,8 @@ def scan_downloads():
                 "sha256": sha,
                 "mtime": mtime
             }
+
+    _save_hash_cache(updated_cache)
     return files_data
 
 def get_next_version():
@@ -75,7 +111,7 @@ def main():
     snapshot_path = os.path.join(SNAPSHOTS_DIR, filename)
     
     snapshot_content = {
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "version": version,
         "files": files_data
     }

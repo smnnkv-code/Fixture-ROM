@@ -107,9 +107,9 @@ def main():
                                 if _info.get("url"):
                                     new_blacklist.add(_info["url"])
                                 new_blacklist.add(_key)
-                    except Exception:
+                    except (OSError, json.JSONDecodeError):
                         pass
-                
+
     # 2. Проверяем новые файлы в текущем слепке
     for rel_path, info_curr in curr_files.items():
         sha = info_curr["sha256"]
@@ -172,7 +172,7 @@ def main():
         try:
             with open(master_rules_path, "r", encoding="utf-8") as f:
                 master_rules = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
     master_rules.update(rules)
     with open(master_rules_path, "w", encoding="utf-8") as f:
@@ -186,9 +186,9 @@ def main():
                 blacklist_data = json.load(f)
                 if not isinstance(blacklist_data, list):
                     blacklist_data = []
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
-            
+
     # Объединяем списки уникально
     blacklist_set = set(blacklist_data)
     blacklist_set.update(new_blacklist)
